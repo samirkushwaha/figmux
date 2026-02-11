@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+exec zypak-wrapper /app/base/electron/electron /app/figmux/src/main.js "$@"

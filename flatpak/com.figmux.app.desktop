@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Figmux
+Comment=Open Figma in a dedicated desktop app
+Exec=figmux
+Icon=com.figmux.app
+Terminal=false
+Categories=Graphics;Utility;
+StartupNotify=true

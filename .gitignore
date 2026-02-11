@@ -1,0 +1,5 @@
+node_modules/
+.flatpak-builder/
+.flatpak-repo/
+*.flatpak
+.DS_Store

@@ -1,0 +1,27 @@
+app-id: com.figmux.app
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+base: org.electronjs.Electron2.BaseApp
+base-version: '24.08'
+command: figmux
+
+finish-args:
+  - --share=network
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+
+modules:
+  - name: figmux
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 scripts/figmux /app/bin/figmux
+      - install -Dm644 flatpak/com.figmux.app.desktop /app/share/applications/com.figmux.app.desktop
+      - install -Dm644 flatpak/com.figmux.app.metainfo.xml /app/share/metainfo/com.figmux.app.metainfo.xml
+      - install -Dm644 assets/com.figmux.app.svg /app/share/icons/hicolor/scalable/apps/com.figmux.app.svg
+      - mkdir -p /app/figmux
+      - cp -r src /app/figmux/src
+    sources:
+      - type: dir
+        path: ..

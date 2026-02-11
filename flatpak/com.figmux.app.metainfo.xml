@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.figmux.app</id>
+  <name>Figmux</name>
+  <summary>Dedicated Linux desktop wrapper for Figma</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="com.figmux">
+    <name>Figmux Contributors</name>
+  </developer>
+  <launchable type="desktop-id">com.figmux.app.desktop</launchable>
+  <url type="homepage">https://www.figma.com</url>
+  <description>
+    <p>
+      Figmux opens Figma in an Electron-based Linux desktop window with a persistent
+      browser partition so session data is retained across restarts.
+    </p>
+  </description>
+  <categories>
+    <category>Graphics</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+</component>
