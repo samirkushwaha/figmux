@@ -6,8 +6,14 @@ Figmux is a Linux desktop wrapper for [Figma](https://www.figma.com) built with 
 
 - Opens `https://www.figma.com` in a dedicated desktop window.
 - Uses a persistent Electron partition: `persist:figmux`.
-- Allows Figma/Google OAuth sign-in popups in-app for callback compatibility.
-- Routes non-auth popups and non-Figma links to the system browser.
+- Includes a custom titlebar tab strip with `+` button for multiple Figma tabs.
+- Restores open tabs on restart.
+- `+` always opens `https://www.figma.com/files/recent`.
+- Opens non-auth `window.open` requests from Figma as new in-app tabs.
+- Keeps OAuth sign-in popups in-app for callback compatibility.
+- Routes non-Figma external links to the system browser.
+- Reflows active content correctly on resize, maximize, unmaximize, and fullscreen transitions.
+- Uses overlay-native window controls and adapts tab colors to light/dark system theme.
 - Ships with Flatpak metadata for app ID `com.figmux.app`.
 
 ## Prerequisites
@@ -69,9 +75,20 @@ npm run flatpak:run
 ## Authentication behavior
 
 - OAuth login flows (including Google) open in an in-app popup window so Figma can complete auth callbacks.
-- Non-auth popup URLs are denied in-app and opened in your default system browser.
+- Non-auth popup URLs from Figma open as new in-app tabs.
 - Figma pages under `figma.com` continue to navigate inside the main app window.
 - Session data still persists in the Electron partition `persist:figmux`.
+
+## Tabs and shortcuts
+
+- `+` button: open a new Figma tab.
+- New tabs always start at `https://www.figma.com/files/recent`.
+- `Ctrl+T`: open new tab.
+- `Ctrl+W`: close active tab.
+- `Ctrl+Tab`: next tab.
+- `Ctrl+Shift+Tab`: previous tab.
+- Closing the last tab immediately creates a fresh Figma tab.
+- Open tabs are restored on app restart.
 
 ## Session persistence verification
 
