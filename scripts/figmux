@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-exec zypak-wrapper /app/base/electron/electron /app/figmux/src/main.js "$@"
+# Some shells (e.g. VS Code integrated terminals) export this globally and force Electron into Node mode.
+unset ELECTRON_RUN_AS_NODE
+
+exec /app/electron/electron --no-sandbox /app/figmux/src/main.js "$@"

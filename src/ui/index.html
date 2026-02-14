@@ -8,11 +8,24 @@
   </head>
   <body>
     <header id="titlebar" class="titlebar">
-      <div class="tabs-scroller no-drag" id="tabs-scroller">
+      <div class="tabs-scroller" id="tabs-scroller">
         <div class="tabs" id="tabs"></div>
-        <button type="button" id="add-tab" class="add-tab" aria-label="New tab">+</button>
+        <button type="button" id="add-tab" class="add-tab" aria-label="New tab"></button>
       </div>
-      <div class="controls-space" aria-hidden="true"></div>
+      <div class="window-controls" aria-label="Window controls">
+        <button type="button" id="window-minimize" class="window-control" aria-label="Minimize window">
+          <span class="window-control-dot" aria-hidden="true"></span>
+          <span class="window-control-glyph" aria-hidden="true">-</span>
+        </button>
+        <button type="button" id="window-maximize" class="window-control" aria-label="Maximize window">
+          <span class="window-control-dot" aria-hidden="true"></span>
+          <span id="window-maximize-glyph" class="window-control-glyph" aria-hidden="true">&#9633;</span>
+        </button>
+        <button type="button" id="window-close" class="window-control" aria-label="Close window">
+          <span class="window-control-dot" aria-hidden="true"></span>
+          <span class="window-control-glyph" aria-hidden="true">&times;</span>
+        </button>
+      </div>
     </header>
 
     <main id="surface" class="surface"></main>

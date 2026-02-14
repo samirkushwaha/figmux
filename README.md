@@ -72,6 +72,21 @@ Install locally and run:
 npm run flatpak:run
 ```
 
+## Local Flatpak export
+
+This flow creates a local `.flatpak` bundle and installs it so the OS app launcher can open Figmux.
+
+```bash
+npm install
+npm run flatpak:build
+flatpak install --user --reinstall ./com.figmux.app.flatpak
+flatpak run com.figmux.app
+```
+
+Notes:
+- `npm run dev` is for local Electron development only and does not create launcher integration.
+- Launcher integration comes from the Flatpak install (`com.figmux.app` desktop entry).
+
 ## Authentication behavior
 
 - OAuth login flows (including Google) open in an in-app popup window so Figma can complete auth callbacks.
@@ -102,3 +117,7 @@ If sessions are lost, verify `src/main.js` still uses `partition: "persist:figmu
 ## Troubleshooting
 
 - Messages like `GetVSyncParametersIfAvailable() failed` are usually Chromium graphics timing warnings and can be ignored unless you see visible rendering glitches, freezes, or crashes.
+- If clicking the OS launcher does nothing:
+  - Verify installation: `flatpak list --app | grep com.figmux.app`
+  - Run directly to inspect errors: `flatpak run com.figmux.app`
+  - If icon or launcher metadata appears stale, unpin Figmux from your dock/taskbar, launch it again from app grid, then re-pin.

@@ -13,9 +13,13 @@ const GOOGLE_OAUTH_HOSTS = new Set([
 const GOOGLE_AUTH_RELAY_SUFFIX = '.googleusercontent.com';
 const FIGMA_AUTH_PATH_PREFIXES = ['/login', '/signup', '/oauth'];
 const ABOUT_BLANK = 'about:blank';
-const TITLEBAR_HEIGHT = 44;
-const WINDOW_CONTROLS_INSET = 160;
+const TITLEBAR_HEIGHT = 36;
+const WINDOW_CONTROLS_INSET = 112;
 const TAB_STATE_FILE = 'tabs-state.json';
+const APP_ICON_PNG_FILENAME = 'com.figmux.app.png';
+const APP_ICON_SVG_FILENAME = 'com.figmux.app.svg';
+const FLATPAK_BITMAP_ICON_DIR = '/app/share/icons/hicolor/512x512/apps';
+const FLATPAK_ICON_DIR = '/app/share/icons/hicolor/scalable/apps';
 
 let mainWindow;
 let activeTabId = null;
@@ -27,6 +31,31 @@ let shellReady = false;
 const tabs = new Map();
 /** @type {string[]} */
 const tabOrder = [];
+
+function resolveAppIconPath() {
+  const candidatePaths = [
+    path.join(__dirname, '..', 'assets', APP_ICON_PNG_FILENAME),
+    path.join(process.cwd(), 'assets', APP_ICON_PNG_FILENAME),
+    path.join(FLATPAK_BITMAP_ICON_DIR, APP_ICON_PNG_FILENAME),
+    path.join(__dirname, '..', 'assets', APP_ICON_SVG_FILENAME),
+    path.join(process.cwd(), 'assets', APP_ICON_SVG_FILENAME),
+    path.join(FLATPAK_ICON_DIR, APP_ICON_SVG_FILENAME)
+  ];
+
+  for (const candidatePath of candidatePaths) {
+    if (fs.existsSync(candidatePath)) {
+      return candidatePath;
+    }
+  }
+
+  return null;
+}
+
+const appIconPath = resolveAppIconPath();
+
+if (process.platform === 'linux') {
+  app.commandLine.appendSwitch('class', 'com.figmux.app');
+}
 
 function parseHttpsUrl(input) {
   try {
@@ -127,7 +156,7 @@ function buildTabWebPreferences() {
 }
 
 function buildAuthPopupWindowOptions() {
-  return {
+  const options = {
     title: 'Figmux Login',
     width: 520,
     height: 740,
@@ -136,6 +165,12 @@ function buildAuthPopupWindowOptions() {
     autoHideMenuBar: true,
     webPreferences: buildTabWebPreferences()
   };
+
+  if (process.platform === 'linux' && appIconPath) {
+    options.icon = appIconPath;
+  }
+
+  return options;
 }
 
 function canGoBackCompat(webContents) {
@@ -203,6 +238,16 @@ function emitTabsState() {
   }
 
   mainWindow.webContents.send('tabs:stateChanged', getTabsSnapshot());
+}
+
+function emitWindowState() {
+  if (!mainWindow || mainWindow.isDestroyed() || !shellReady) {
+    return;
+  }
+
+  mainWindow.webContents.send('window:stateChanged', {
+    isMaximized: mainWindow.isMaximized()
+  });
 }
 
 function getTabStatePath() {
@@ -575,26 +620,56 @@ function setupIpc() {
     }
     return getTabsSnapshot();
   });
+
+  ipcMain.handle('window:minimize', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return;
+    }
+    mainWindow.minimize();
+  });
+
+  ipcMain.handle('window:toggleMaximize', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return;
+    }
+
+    if (mainWindow.isMaximized()) {
+      mainWindow.unmaximize();
+    } else {
+      mainWindow.maximize();
+    }
+  });
+
+  ipcMain.handle('window:close', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return;
+    }
+    mainWindow.close();
+  });
 }
 
 function createMainWindow() {
-  mainWindow = new BrowserWindow({
+  const windowOptions = {
     width: 1360,
     height: 860,
     minWidth: 960,
     minHeight: 640,
     autoHideMenuBar: true,
     title: 'Figmux',
-    titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      height: TITLEBAR_HEIGHT
-    },
+    frame: false,
     webPreferences: buildShellWebPreferences()
-  });
+  };
+
+  if (process.platform === 'linux' && appIconPath) {
+    windowOptions.icon = appIconPath;
+  }
+
+  mainWindow = new BrowserWindow(windowOptions);
 
   const onWindowGeometryChanged = () => {
     queueActiveTabBoundsSync();
     emitTabsState();
+    emitWindowState();
   };
 
   mainWindow.on('resize', onWindowGeometryChanged);
@@ -638,6 +713,7 @@ function createMainWindow() {
       windowControlsInset: WINDOW_CONTROLS_INSET
     });
     emitTabsState();
+    emitWindowState();
   });
 
   mainWindow.on('closed', () => {
@@ -646,6 +722,10 @@ function createMainWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, 'ui', 'index.html'));
+}
+
+if (process.platform === 'linux') {
+  app.setDesktopName('com.figmux.app.desktop');
 }
 
 app.whenReady().then(() => {

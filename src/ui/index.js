@@ -1,39 +1,24 @@
 const tabsRoot = document.getElementById('tabs');
 const addTabButton = document.getElementById('add-tab');
+const windowMinimizeButton = document.getElementById('window-minimize');
+const windowMaximizeButton = document.getElementById('window-maximize');
+const windowMaximizeGlyph = document.getElementById('window-maximize-glyph');
+const windowCloseButton = document.getElementById('window-close');
+const TAB_ANIMATION_MS = 170;
 
 let state = {
   activeTabId: null,
   tabs: []
 };
-let layoutState = {
-  titlebarHeight: 44,
-  windowControlsInset: 160
-};
+let hasRenderedInitialTabs = false;
+const tabElements = new Map();
+const closingTabIds = new Set();
 
-function readOverlayInset() {
-  const overlay = window.navigator.windowControlsOverlay;
-  if (!overlay || typeof overlay.getTitlebarAreaRect !== 'function') {
-    return null;
-  }
-
-  const rect = overlay.getTitlebarAreaRect();
-  if (!rect || typeof rect.x !== 'number' || typeof rect.width !== 'number') {
-    return null;
-  }
-
-  const rightInset = Math.max(0, Math.round(window.innerWidth - (rect.x + rect.width)));
-  if (!Number.isFinite(rightInset)) {
-    return null;
-  }
-
-  return rightInset;
-}
-
-function applyControlsInset() {
-  const overlayInset = readOverlayInset();
-  const fallbackInset = Number(layoutState.windowControlsInset) || 0;
-  const resolvedInset = Math.max(fallbackInset, overlayInset ?? 0);
-  document.documentElement.style.setProperty('--controls-inset', `${resolvedInset}px`);
+function createIconSpan(name) {
+  const span = document.createElement('span');
+  span.className = `icon icon-${name}`;
+  span.setAttribute('aria-hidden', 'true');
+  return span;
 }
 
 function safeTitle(tab) {
@@ -44,41 +29,109 @@ function safeTitle(tab) {
   return tab.url || 'Figma';
 }
 
+function requestCloseTab(tabId) {
+  if (closingTabIds.has(tabId)) {
+    return;
+  }
+
+  closingTabIds.add(tabId);
+  const tabButton = tabElements.get(tabId);
+  if (tabButton) {
+    tabButton.classList.add('is-closing');
+  }
+
+  setTimeout(() => {
+    window.figmuxTabs.close(tabId);
+  }, TAB_ANIMATION_MS);
+}
+
+function createTabElement(tab) {
+  const tabButton = document.createElement('button');
+  tabButton.type = 'button';
+  tabButton.className = 'tab';
+  tabButton.dataset.tabId = tab.id;
+
+  const title = document.createElement('span');
+  title.className = 'tab-title';
+
+  const closeButton = document.createElement('button');
+  closeButton.type = 'button';
+  closeButton.className = 'tab-close';
+  closeButton.title = 'Close tab';
+  closeButton.append(createIconSpan('close'));
+  closeButton.addEventListener('click', (event) => {
+    event.stopPropagation();
+    requestCloseTab(tab.id);
+  });
+
+  tabButton.addEventListener('click', () => {
+    window.figmuxTabs.activate(tab.id);
+  });
+
+  tabButton.append(title, closeButton);
+  return tabButton;
+}
+
+function updateTabElement(tabButton, tab) {
+  const titleText = safeTitle(tab);
+  const title = tabButton.querySelector('.tab-title');
+  const closeButton = tabButton.querySelector('.tab-close');
+
+  tabButton.dataset.tabId = tab.id;
+  tabButton.title = titleText;
+  tabButton.classList.toggle('active', Boolean(tab.isActive));
+  tabButton.removeAttribute('data-removing');
+
+  if (!closingTabIds.has(tab.id)) {
+    tabButton.classList.remove('is-closing');
+  }
+
+  title.textContent = titleText;
+  closeButton.setAttribute('aria-label', `Close ${titleText}`);
+}
+
 function renderTabs() {
-  tabsRoot.textContent = '';
+  const fragment = document.createDocumentFragment();
+  const nextTabIds = new Set();
 
   for (const tab of state.tabs) {
-    const tabButton = document.createElement('button');
-    tabButton.type = 'button';
-    tabButton.className = `tab${tab.isActive ? ' active' : ''}`;
-    tabButton.dataset.tabId = tab.id;
-    tabButton.title = safeTitle(tab);
+    let tabButton = tabElements.get(tab.id);
+    const isNew = !tabButton;
 
-    const loading = document.createElement('span');
-    loading.className = 'tab-loading';
-    loading.style.visibility = tab.isLoading ? 'visible' : 'hidden';
+    if (!tabButton) {
+      tabButton = createTabElement(tab);
+      tabElements.set(tab.id, tabButton);
+    }
 
-    const title = document.createElement('span');
-    title.className = 'tab-title';
-    title.textContent = safeTitle(tab);
+    updateTabElement(tabButton, tab);
+    fragment.appendChild(tabButton);
+    nextTabIds.add(tab.id);
 
-    const closeButton = document.createElement('button');
-    closeButton.type = 'button';
-    closeButton.className = 'tab-close';
-    closeButton.textContent = 'x';
-    closeButton.title = 'Close tab';
-    closeButton.addEventListener('click', (event) => {
-      event.stopPropagation();
-      window.figmuxTabs.close(tab.id);
-    });
-
-    tabButton.addEventListener('click', () => {
-      window.figmuxTabs.activate(tab.id);
-    });
-
-    tabButton.append(loading, title, closeButton);
-    tabsRoot.appendChild(tabButton);
+    if (isNew && hasRenderedInitialTabs) {
+      tabButton.classList.add('is-entering');
+      requestAnimationFrame(() => {
+        tabButton.classList.remove('is-entering');
+      });
+    }
   }
+
+  tabsRoot.appendChild(fragment);
+
+  for (const [tabId, tabButton] of tabElements.entries()) {
+    if (nextTabIds.has(tabId) || tabButton.dataset.removing === 'true') {
+      continue;
+    }
+
+    tabButton.dataset.removing = 'true';
+    tabButton.classList.add('is-closing');
+    setTimeout(() => {
+      tabButton.remove();
+      tabElements.delete(tabId);
+      closingTabIds.delete(tabId);
+    }, TAB_ANIMATION_MS);
+  }
+
+  hasRenderedInitialTabs = true;
 }
 
 function applyLayout(layout) {
@@ -87,19 +140,40 @@ function applyLayout(layout) {
   }
 
   if (typeof layout.titlebarHeight === 'number') {
-    layoutState.titlebarHeight = layout.titlebarHeight;
     document.documentElement.style.setProperty('--titlebar-height', `${layout.titlebarHeight}px`);
   }
 
   if (typeof layout.windowControlsInset === 'number') {
-    layoutState.windowControlsInset = layout.windowControlsInset;
+    document.documentElement.style.setProperty('--controls-inset', `${layout.windowControlsInset}px`);
+  }
+}
+
+function applyWindowState(windowState) {
+  if (!windowState || typeof windowState.isMaximized !== 'boolean') {
+    return;
   }
 
-  applyControlsInset();
+  const maximized = windowState.isMaximized;
+  windowMaximizeButton.setAttribute('aria-label', maximized ? 'Restore window' : 'Maximize window');
+  windowMaximizeGlyph.textContent = maximized ? '\u2750' : '\u25A1';
 }
+
+addTabButton.append(createIconSpan('plus'));
 
 addTabButton.addEventListener('click', () => {
   window.figmuxTabs.create();
+});
+
+windowMinimizeButton.addEventListener('click', () => {
+  window.windowControls.minimize();
+});
+
+windowMaximizeButton.addEventListener('click', () => {
+  window.windowControls.toggleMaximize();
+});
+
+windowCloseButton.addEventListener('click', () => {
+  window.windowControls.close();
 });
 
 window.figmuxTabs.onStateChanged((nextState) => {
@@ -111,15 +185,8 @@ window.figmuxTabs.onLayout((layout) => {
   applyLayout(layout);
 });
 
-const overlay = window.navigator.windowControlsOverlay;
-if (overlay && typeof overlay.addEventListener === 'function') {
-  overlay.addEventListener('geometrychange', () => {
-    applyControlsInset();
-  });
-}
-
-window.addEventListener('resize', () => {
-  applyControlsInset();
+window.windowControls.onStateChanged((windowState) => {
+  applyWindowState(windowState);
 });
 
 window.figmuxTabs.list().then((initialState) => {

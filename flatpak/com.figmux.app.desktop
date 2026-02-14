@@ -7,3 +7,4 @@ Icon=com.figmux.app
 Terminal=false
 Categories=Graphics;Utility;
 StartupNotify=true
+StartupWMClass=com.figmux.app

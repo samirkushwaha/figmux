@@ -21,3 +21,16 @@ contextBridge.exposeInMainWorld('figmuxTabs', {
     };
   }
 });
+
+contextBridge.exposeInMainWorld('windowControls', {
+  minimize: () => ipcRenderer.invoke('window:minimize'),
+  toggleMaximize: () => ipcRenderer.invoke('window:toggleMaximize'),
+  close: () => ipcRenderer.invoke('window:close'),
+  onStateChanged: (handler) => {
+    const listener = (_event, state) => handler(state);
+    ipcRenderer.on('window:stateChanged', listener);
+    return () => {
+      ipcRenderer.removeListener('window:stateChanged', listener);
+    };
+  }
+});
