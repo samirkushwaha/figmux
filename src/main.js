@@ -1,6 +1,15 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { app, BrowserWindow, WebContentsView, shell, session, ipcMain } = require('electron');
+const {
+  app,
+  BrowserWindow,
+  WebContentsView,
+  shell,
+  session,
+  ipcMain,
+  Menu,
+  webContents: electronWebContents
+} = require('electron');
 
 const FIGMA_HOME = 'https://www.figma.com';
 const FIGMA_RECENTS = 'https://www.figma.com/files/recent';
@@ -52,9 +61,42 @@ function resolveAppIconPath() {
 }
 
 const appIconPath = resolveAppIconPath();
+const inputDebugEnabled = process.env.FIGMUX_INPUT_DEBUG === '1';
+
+function appendCommandLineCsvSwitch(name, values) {
+  const existing = app.commandLine.getSwitchValue(name);
+  const merged = new Set(
+    existing
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean)
+  );
+
+  for (const value of values) {
+    if (value) {
+      merged.add(value);
+    }
+  }
+
+  if (merged.size > 0) {
+    app.commandLine.appendSwitch(name, Array.from(merged).join(','));
+  }
+}
 
 if (process.platform === 'linux') {
   app.commandLine.appendSwitch('class', 'com.figmux.app');
+  app.commandLine.appendSwitch('enable-pinch');
+  app.commandLine.appendSwitch('touch-events', 'enabled');
+  appendCommandLineCsvSwitch('disable-features', [
+    'AcceleratedVideoDecodeLinuxGL',
+    'VaapiVideoDecoder'
+  ]);
+
+  if (!inputDebugEnabled) {
+    // Suppress noisy Chromium driver/runtime logs in normal runs.
+    app.commandLine.appendSwitch('disable-logging');
+    app.commandLine.appendSwitch('log-level', '3');
+  }
 }
 
 function parseHttpsUrl(input) {
@@ -126,6 +168,84 @@ function shouldOpenAuthPopup(url, referrerUrl) {
 
 function canRestoreUrl(input) {
   return Boolean(parseHttpsUrl(input)) && (isFigmaUrl(input) || isOAuthUrl(input));
+}
+
+function isControlModified(input) {
+  return (
+    Boolean(input && input.control) ||
+    (Array.isArray(input && input.modifiers) && input.modifiers.includes('control'))
+  );
+}
+
+function canCanvasZoom(url) {
+  const parsed = parseHttpsUrl(url);
+  if (!parsed) {
+    return false;
+  }
+
+  if (!isFigmaUrl(url) || isOAuthUrl(url)) {
+    return false;
+  }
+
+  return (
+    parsed.pathname.startsWith('/file/') ||
+    parsed.pathname.startsWith('/design/') ||
+    parsed.pathname.startsWith('/proto/') ||
+    parsed.pathname.startsWith('/board/')
+  );
+}
+
+function findTabIdByWebContents(sourceWebContents) {
+  if (!sourceWebContents) {
+    return null;
+  }
+
+  for (const [tabId, tab] of tabs.entries()) {
+    if (tab.view.webContents === sourceWebContents) {
+      return tabId;
+    }
+  }
+
+  return null;
+}
+
+function handleTabShortcut(event, input, sourceWebContents = null) {
+  const ctrlOrMeta = Boolean(input && (input.control || input.meta));
+  if (!ctrlOrMeta || !input || input.type !== 'keyDown') {
+    return false;
+  }
+
+  const key = (input.key || '').toLowerCase();
+  let handled = true;
+
+  if (key === 't') {
+    createTab({ activate: true });
+  } else if (key === 'w') {
+    const tabIdFromSource = findTabIdByWebContents(sourceWebContents);
+    const focusedWebContents =
+      sourceWebContents ||
+      (typeof electronWebContents.getFocusedWebContents === 'function'
+        ? electronWebContents.getFocusedWebContents()
+        : null);
+    const focusedTabId = findTabIdByWebContents(focusedWebContents);
+    const tabIdToClose = activeTabId || focusedTabId || tabIdFromSource;
+    closeTab(tabIdToClose);
+  } else if (key === 'q') {
+    app.quit();
+  } else if (key === 'tab') {
+    cycleTabs(Boolean(input.shift));
+  } else {
+    handled = false;
+  }
+
+  if (handled && event) {
+    event.preventDefault();
+    if (typeof event.stopPropagation === 'function') {
+      event.stopPropagation();
+    }
+  }
+
+  return handled;
 }
 
 function routeExternal(input) {
@@ -279,6 +399,64 @@ function queuePersistTabState() {
 
 function trackTabState(tab) {
   const { webContents } = tab.view;
+  let forwardingSyntheticZoom = false;
+  let pinchUpdateQueued = false;
+  const logInputDebug = inputDebugEnabled;
+  const lastPointer = { x: 0, y: 0 };
+
+  function sendCanvasZoomWheel(zoomIn) {
+    forwardingSyntheticZoom = true;
+    try {
+      webContents.sendInputEvent({
+        type: 'mouseWheel',
+        x: lastPointer.x,
+        y: lastPointer.y,
+        deltaX: 0,
+        deltaY: zoomIn ? -120 : 120,
+        canScroll: true,
+        modifiers: ['control']
+      });
+    } finally {
+      forwardingSyntheticZoom = false;
+    }
+  }
+
+  function extractZoomDirection(input) {
+    const numericFields = ['scale', 'deltaY', 'wheelDeltaY', 'wheelTicksY', 'delta'];
+    for (const field of numericFields) {
+      const value = input && input[field];
+      if (typeof value === 'number' && Number.isFinite(value) && value !== 0 && value !== 1) {
+        if (field === 'scale') {
+          return value > 1;
+        }
+        return value < 0;
+      }
+    }
+    return null;
+  }
+
+  webContents
+    .setVisualZoomLevelLimits(1, 3)
+    .catch(() => {
+      // Ignore platforms where visual zoom limits are unsupported.
+    });
+
+  webContents.setZoomFactor(1);
+
+  function handlePinchGestureUpdate() {
+    pinchUpdateQueued = false;
+    const zoomFactor = webContents.getZoomFactor();
+    const zoomIn = zoomFactor > 1.001;
+    const zoomOut = zoomFactor < 0.999;
+
+    if ((zoomIn || zoomOut) && canCanvasZoom(tab.url) && !forwardingSyntheticZoom) {
+      sendCanvasZoomWheel(zoomIn);
+    }
+
+    if (zoomFactor !== 1) {
+      webContents.setZoomFactor(1);
+    }
+  }
 
   webContents.setWindowOpenHandler(({ url, referrer }) => {
     if (shouldOpenAuthPopup(url, referrer.url)) {
@@ -368,30 +546,85 @@ function trackTabState(tab) {
     queuePersistTabState();
   });
 
+  webContents.on('input-event', (_event, input) => {
+    if (forwardingSyntheticZoom) {
+      return;
+    }
+
+    if (
+      logInputDebug &&
+      (input.type.startsWith('gesture') || input.type === 'mouseWheel')
+    ) {
+      console.log('[figmux-input]', {
+        type: input.type,
+        input,
+        control: input.control,
+        modifiers: input.modifiers,
+        x: input.x,
+        y: input.y
+      });
+    }
+
+    if (input.type === 'gesturePinchUpdate') {
+      const direction = extractZoomDirection(input);
+      if (direction !== null) {
+        if (canCanvasZoom(tab.url)) {
+          sendCanvasZoomWheel(direction);
+        }
+      } else if (!pinchUpdateQueued) {
+        pinchUpdateQueued = true;
+        setTimeout(handlePinchGestureUpdate, 0);
+      }
+    }
+  });
+
+  webContents.on('before-mouse-event', (event, mouse) => {
+    if (forwardingSyntheticZoom) {
+      return;
+    }
+
+    if (
+      logInputDebug &&
+      mouse &&
+      mouse.type === 'mouseWheel'
+    ) {
+      console.log('[figmux-mouse]', {
+        type: mouse.type,
+        mouse,
+        control: mouse.control,
+        modifiers: mouse.modifiers,
+        x: mouse.x,
+        y: mouse.y
+      });
+    }
+
+    if (Number.isFinite(mouse.x) && Number.isFinite(mouse.y)) {
+      lastPointer.x = Math.round(mouse.x);
+      lastPointer.y = Math.round(mouse.y);
+    }
+
+    if (mouse && mouse.type === 'mouseWheel' && isControlModified(mouse)) {
+      event.preventDefault();
+      const direction = extractZoomDirection(mouse);
+      if (direction !== null && canCanvasZoom(tab.url)) {
+        sendCanvasZoomWheel(direction);
+      }
+    }
+  });
+
+  webContents.on('zoom-changed', (_event, zoomDirection) => {
+    if (logInputDebug) {
+      console.log('[figmux-zoom]', {
+        direction: zoomDirection,
+        url: tab.url
+      });
+    }
+    // Keep shell/page zoom at 1x; pinch forwarding is handled from gesture updates.
+    webContents.setZoomFactor(1);
+  });
+
   webContents.on('before-input-event', (event, input) => {
-    const ctrlOrMeta = input.control || input.meta;
-    if (!ctrlOrMeta || input.type !== 'keyDown') {
-      return;
-    }
-
-    const key = (input.key || '').toLowerCase();
-
-    if (key === 't') {
-      event.preventDefault();
-      createTab({ activate: true });
-      return;
-    }
-
-    if (key === 'w') {
-      event.preventDefault();
-      closeTab(activeTabId);
-      return;
-    }
-
-    if (key === 'tab') {
-      event.preventDefault();
-      cycleTabs(input.shift);
-    }
+    handleTabShortcut(event, input, webContents);
   });
 }
 
@@ -657,6 +890,8 @@ function createMainWindow() {
     autoHideMenuBar: true,
     title: 'Figmux',
     frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
     webPreferences: buildShellWebPreferences()
   };
 
@@ -665,6 +900,13 @@ function createMainWindow() {
   }
 
   mainWindow = new BrowserWindow(windowOptions);
+
+  mainWindow.webContents
+    .setVisualZoomLevelLimits(1, 1)
+    .catch(() => {
+      // Ignore platforms where visual zoom limits are unsupported.
+    });
+  mainWindow.webContents.setZoomFactor(1);
 
   const onWindowGeometryChanged = () => {
     queueActiveTabBoundsSync();
@@ -679,30 +921,28 @@ function createMainWindow() {
   mainWindow.on('leave-full-screen', onWindowGeometryChanged);
   mainWindow.on('restore', onWindowGeometryChanged);
 
+  mainWindow.webContents.on('before-mouse-event', (event, mouse) => {
+    if (mouse && mouse.type === 'mouseWheel' && isControlModified(mouse)) {
+      event.preventDefault();
+    }
+  });
+
+  mainWindow.webContents.on('zoom-changed', () => {
+    mainWindow.webContents.setZoomFactor(1);
+  });
+
   mainWindow.webContents.on('before-input-event', (event, input) => {
-    const ctrlOrMeta = input.control || input.meta;
-    if (!ctrlOrMeta || input.type !== 'keyDown') {
+    const focusedWebContents =
+      typeof electronWebContents.getFocusedWebContents === 'function'
+        ? electronWebContents.getFocusedWebContents()
+        : null;
+
+    // Avoid double-handling shortcuts when a tab WebContents is focused.
+    if (findTabIdByWebContents(focusedWebContents)) {
       return;
     }
 
-    const key = (input.key || '').toLowerCase();
-
-    if (key === 't') {
-      event.preventDefault();
-      createTab({ activate: true });
-      return;
-    }
-
-    if (key === 'w') {
-      event.preventDefault();
-      closeTab(activeTabId);
-      return;
-    }
-
-    if (key === 'tab') {
-      event.preventDefault();
-      cycleTabs(input.shift);
-    }
+    handleTabShortcut(event, input, focusedWebContents);
   });
 
   mainWindow.webContents.on('did-finish-load', () => {
@@ -729,6 +969,10 @@ if (process.platform === 'linux') {
 }
 
 app.whenReady().then(() => {
+  if (process.platform === 'linux') {
+    Menu.setApplicationMenu(null);
+  }
+
   const figmaPartitionSession = session.fromPartition(PERSISTENT_PARTITION);
 
   figmaPartitionSession.setPermissionRequestHandler((_webContents, _permission, callback) => {

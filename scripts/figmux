@@ -4,4 +4,19 @@ set -euo pipefail
 # Some shells (e.g. VS Code integrated terminals) export this globally and force Electron into Node mode.
 unset ELECTRON_RUN_AS_NODE
 
-exec /app/electron/electron --no-sandbox /app/figmux/src/main.js "$@"
+ELECTRON_ARGS=(--no-sandbox)
+
+if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
+  ELECTRON_ARGS+=(--enable-features=UseOzonePlatform --ozone-platform-hint=wayland)
+fi
+
+if [[ ! -e /dev/dri/renderD128 ]]; then
+  export LIBGL_ALWAYS_SOFTWARE=1
+  ELECTRON_ARGS+=(--disable-gpu)
+fi
+
+if [[ "${FIGMUX_INPUT_DEBUG:-0}" == "1" ]]; then
+  exec /app/electron/electron "${ELECTRON_ARGS[@]}" /app/figmux/src/main.js "$@"
+else
+  exec /app/electron/electron "${ELECTRON_ARGS[@]}" /app/figmux/src/main.js "$@" 2>/dev/null
+fi

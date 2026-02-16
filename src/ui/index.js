@@ -115,7 +115,10 @@ function renderTabs() {
     }
   }
 
-  tabsRoot.appendChild(fragment);
+  if (addTabButton.parentElement !== tabsRoot) {
+    tabsRoot.appendChild(addTabButton);
+  }
+  tabsRoot.insertBefore(fragment, addTabButton);
 
   for (const [tabId, tabButton] of tabElements.entries()) {
     if (nextTabIds.has(tabId) || tabButton.dataset.removing === 'true') {
@@ -154,6 +157,8 @@ function applyWindowState(windowState) {
   }
 
   const maximized = windowState.isMaximized;
+  document.body.classList.toggle('is-maximized', maximized);
+  document.documentElement.classList.toggle('is-maximized', maximized);
   windowMaximizeButton.setAttribute('aria-label', maximized ? 'Restore window' : 'Maximize window');
   windowMaximizeGlyph.textContent = maximized ? '\u2750' : '\u25A1';
 }

@@ -8,6 +8,8 @@ command: figmux
 
 finish-args:
   - --share=network
+  - --share=ipc
+  - --device=dri
   - --socket=wayland
   - --socket=fallback-x11
   - --socket=pulseaudio

@@ -79,13 +79,15 @@ This flow creates a local `.flatpak` bundle and installs it so the OS app launch
 ```bash
 npm install
 npm run flatpak:build
-flatpak install --user --reinstall ./com.figmux.app.flatpak
+flatpak uninstall --user -y com.figmux.app
+flatpak install --user ./com.figmux.app.flatpak
 flatpak run com.figmux.app
 ```
 
 Notes:
 - `npm run dev` is for local Electron development only and does not create launcher integration.
 - Launcher integration comes from the Flatpak install (`com.figmux.app` desktop entry).
+- If you use a local repo remote (`figmux-local`), installing from the bundle path ensures you run the exact build you just created.
 
 ## Authentication behavior
 
@@ -120,4 +122,8 @@ If sessions are lost, verify `src/main.js` still uses `partition: "persist:figmu
 - If clicking the OS launcher does nothing:
   - Verify installation: `flatpak list --app | grep com.figmux.app`
   - Run directly to inspect errors: `flatpak run com.figmux.app`
+  - Verify GPU device exposure in sandbox: `flatpak run --command=sh com.figmux.app -c 'ls -l /dev/dri || true'`
+  - Wayland/X11 variables inside sandbox: `flatpak run --command=sh com.figmux.app -c 'echo DISPLAY=$DISPLAY WAYLAND_DISPLAY=$WAYLAND_DISPLAY XDG_SESSION_TYPE=$XDG_SESSION_TYPE'`
+  - `Failed to connect to socket /run/dbus/system_bus_socket` can appear and is usually not the primary blocker.
+  - GPU/EGL/ozone crashes are actionable and usually indicate missing GPU access or driver/runtime mismatch.
   - If icon or launcher metadata appears stale, unpin Figmux from your dock/taskbar, launch it again from app grid, then re-pin.
