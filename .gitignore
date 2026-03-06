@@ -3,4 +3,5 @@ node_modules/
 .flatpak-repo/
 .flatpak-state/
 *.flatpak
+dist/
 .DS_Store

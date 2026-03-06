@@ -19,6 +19,7 @@ modules:
     buildsystem: simple
     build-commands:
       - install -Dm755 scripts/figmux /app/bin/figmux
+      - install -Dm755 figma-agent-x86_64-unknown-linux-gnu /app/bin/figma-agent
       - install -Dm644 flatpak/com.figmux.app.desktop /app/share/applications/com.figmux.app.desktop
       - install -Dm644 flatpak/com.figmux.app.metainfo.xml /app/share/metainfo/com.figmux.app.metainfo.xml
       - install -Dm644 assets/com.figmux.app.svg /app/share/icons/hicolor/scalable/apps/com.figmux.app.svg
@@ -28,5 +29,8 @@ modules:
       - cp -r node_modules/electron/dist/* /app/electron/
       - cp -r src /app/figmux/src
     sources:
+      - type: file
+        url: https://github.com/neetly/figma-agent-linux/releases/download/0.4.3/figma-agent-x86_64-unknown-linux-gnu
+        sha256: 85661938e54ad5f6c4af7101d7a7375b1f0f9f132c0c517530b39eea8388656c
       - type: dir
         path: ..

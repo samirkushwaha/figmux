@@ -1,5 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const http = require('node:http');
+const { spawn } = require('node:child_process');
 const {
   app,
   BrowserWindow,
@@ -27,14 +29,23 @@ const WINDOW_CONTROLS_INSET = 112;
 const TAB_STATE_FILE = 'tabs-state.json';
 const APP_ICON_PNG_FILENAME = 'com.figmux.app.png';
 const APP_ICON_SVG_FILENAME = 'com.figmux.app.svg';
+const FIGMA_AGENT_BINARY_PATH = '/app/bin/figma-agent';
+const FIGMA_AGENT_VERSION_URL = 'http://127.0.0.1:44950/figma/version';
+const FIGMA_AGENT_PROBE_TIMEOUT_MS = 1200;
+const FIGMA_AGENT_STARTUP_WAIT_MS = 600;
 const FLATPAK_BITMAP_ICON_DIR = '/app/share/icons/hicolor/512x512/apps';
 const FLATPAK_ICON_DIR = '/app/share/icons/hicolor/scalable/apps';
+const WINDOWS_CHROMIUM_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36';
+const FIGMA_AGENT_ALLOWED_PERMISSIONS = new Set(['local-fonts', 'unknown']);
 
 let mainWindow;
 let activeTabId = null;
 let tabIdCounter = 0;
 let tabStateWriteTimer;
 let shellReady = false;
+let bundledFigmaAgentProcess = null;
+let defaultFigmaUserAgent = null;
 
 /** @type {Map<string, {id: string, view: import('electron').WebContentsView, title: string, url: string, isLoading: boolean, canGoBack: boolean, canGoForward: boolean}>} */
 const tabs = new Map();
@@ -256,6 +267,142 @@ function routeExternal(input) {
   }
 }
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function probeFigmaAgent(timeoutMs = FIGMA_AGENT_PROBE_TIMEOUT_MS) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(value);
+    };
+
+    const request = http.get(FIGMA_AGENT_VERSION_URL, (response) => {
+      response.resume();
+      finish(response.statusCode >= 200 && response.statusCode < 300);
+    });
+
+    request.setTimeout(timeoutMs, () => {
+      request.destroy();
+      finish(false);
+    });
+
+    request.on('error', () => {
+      finish(false);
+    });
+  });
+}
+
+async function ensureFigmaAgentReady() {
+  if (process.platform !== 'linux') {
+    return;
+  }
+
+  if (await probeFigmaAgent()) {
+    return;
+  }
+
+  if (!fs.existsSync(FIGMA_AGENT_BINARY_PATH)) {
+    console.warn(`[figmux] Bundled figma-agent not found at ${FIGMA_AGENT_BINARY_PATH}`);
+    return;
+  }
+
+  try {
+    const child = spawn(FIGMA_AGENT_BINARY_PATH, [], {
+      stdio: 'ignore',
+      windowsHide: true
+    });
+
+    child.on('error', (error) => {
+      console.warn('[figmux] Bundled figma-agent process error:', error.message);
+    });
+
+    child.on('exit', (code, signal) => {
+      if (bundledFigmaAgentProcess === child) {
+        bundledFigmaAgentProcess = null;
+      }
+      if (code !== null && code !== 0) {
+        console.warn(`[figmux] Bundled figma-agent exited with code ${code}`);
+      } else if (signal) {
+        console.warn(`[figmux] Bundled figma-agent exited via signal ${signal}`);
+      }
+    });
+
+    bundledFigmaAgentProcess = child;
+  } catch (error) {
+    console.warn('[figmux] Failed to start bundled figma-agent:', error.message);
+    return;
+  }
+
+  await delay(FIGMA_AGENT_STARTUP_WAIT_MS);
+
+  if (!(await probeFigmaAgent())) {
+    console.warn(
+      `[figmux] figma-agent is still unreachable at ${FIGMA_AGENT_VERSION_URL}; continuing startup`
+    );
+  }
+}
+
+function stopBundledFigmaAgent() {
+  if (!bundledFigmaAgentProcess || bundledFigmaAgentProcess.killed) {
+    return;
+  }
+
+  try {
+    bundledFigmaAgentProcess.kill('SIGTERM');
+  } catch {
+    // Best effort cleanup only.
+  }
+}
+
+function shouldAllowFigmaPermission(permission, requestUrl) {
+  if (!FIGMA_AGENT_ALLOWED_PERMISSIONS.has(permission)) {
+    return false;
+  }
+
+  return isFigmaUrl(requestUrl);
+}
+
+function selectFigmaUserAgent(url) {
+  if (isFigmaUrl(url) && !isOAuthUrl(url)) {
+    return WINDOWS_CHROMIUM_USER_AGENT;
+  }
+
+  return defaultFigmaUserAgent;
+}
+
+function applyFigmaUserAgentPolicy(targetWebContents, url = '') {
+  if (!targetWebContents || targetWebContents.isDestroyed()) {
+    return;
+  }
+
+  const candidateUrl = url || targetWebContents.getURL();
+  const nextUserAgent = selectFigmaUserAgent(candidateUrl);
+  if (typeof nextUserAgent === 'string' && nextUserAgent.length > 0) {
+    targetWebContents.setUserAgent(nextUserAgent);
+  }
+}
+
+function attachFigmaUserAgentPolicy(targetWebContents) {
+  if (!targetWebContents || targetWebContents.isDestroyed()) {
+    return;
+  }
+
+  applyFigmaUserAgentPolicy(targetWebContents);
+
+  targetWebContents.on('did-start-navigation', (_event, navigationUrl, _isInPlace, isMainFrame) => {
+    if (!isMainFrame) {
+      return;
+    }
+    applyFigmaUserAgentPolicy(targetWebContents, navigationUrl);
+  });
+}
+
 function buildShellWebPreferences() {
   return {
     preload: path.join(__dirname, 'preload.js'),
@@ -404,6 +551,8 @@ function trackTabState(tab) {
   const logInputDebug = inputDebugEnabled;
   const lastPointer = { x: 0, y: 0 };
 
+  attachFigmaUserAgentPolicy(webContents);
+
   function sendCanvasZoomWheel(zoomIn) {
     forwardingSyntheticZoom = true;
     try {
@@ -481,6 +630,7 @@ function trackTabState(tab) {
     authWindow.setMinimumSize(440, 600);
 
     const popupContents = authWindow.webContents;
+    attachFigmaUserAgentPolicy(popupContents);
 
     popupContents.on('will-navigate', (event, url) => {
       if (!isAllowedAuthOrFigmaUrl(url)) {
@@ -968,16 +1118,25 @@ if (process.platform === 'linux') {
   app.setDesktopName('com.figmux.app.desktop');
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (process.platform === 'linux') {
     Menu.setApplicationMenu(null);
   }
 
   const figmaPartitionSession = session.fromPartition(PERSISTENT_PARTITION);
+  defaultFigmaUserAgent = figmaPartitionSession.getUserAgent() || null;
 
-  figmaPartitionSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
-    // This controls Chromium permission prompts (camera/mic/notifications), not cookie banners.
-    callback(false);
+  figmaPartitionSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    const requestingUrl =
+      (details && typeof details.requestingUrl === 'string' && details.requestingUrl) ||
+      (webContents && !webContents.isDestroyed() ? webContents.getURL() : '');
+    callback(shouldAllowFigmaPermission(permission, requestingUrl));
+  });
+
+  await ensureFigmaAgentReady();
+
+  app.on('before-quit', () => {
+    stopBundledFigmaAgent();
   });
 
   setupIpc();
@@ -993,6 +1152,7 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+  stopBundledFigmaAgent();
   if (process.platform !== 'darwin') {
     app.quit();
   }

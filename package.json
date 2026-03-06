@@ -1,6 +1,6 @@
 {
   "name": "figmux",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Linux desktop wrapper for Figma using Electron and Flatpak",
   "main": "src/main.js",
   "license": "MIT",
@@ -11,7 +11,9 @@
     "dev": "electron .",
     "lint": "node --check src/main.js && node --check src/preload.js",
     "flatpak:build": "bash scripts/flatpak-build.sh",
-    "flatpak:run": "bash scripts/flatpak-run.sh"
+    "flatpak:run": "bash scripts/flatpak-run.sh",
+    "flatpak:release": "bash scripts/release-bundle.sh --bump-patch",
+    "flatpak:release:verify": "bash scripts/release-bundle.sh --bump-patch --verify"
   },
   "devDependencies": {
     "electron": "31.7.7"
