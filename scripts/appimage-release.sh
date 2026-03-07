@@ -8,6 +8,7 @@ ARCH="x86_64"
 ARTIFACT_NAME="figmux-${VERSION}-${ARCH}.AppImage"
 ARTIFACT_PATH="${DIST_DIR}/${ARTIFACT_NAME}"
 CHECKSUM_PATH="${ARTIFACT_PATH}.sha256"
+UPDATE_METADATA_PATH="${DIST_DIR}/latest-linux.yml"
 
 required_cmds=(node npm sha256sum)
 for cmd in "${required_cmds[@]}"; do
@@ -25,6 +26,11 @@ if [[ ! -f "${ARTIFACT_PATH}" ]]; then
   exit 1
 fi
 
+if [[ ! -f "${UPDATE_METADATA_PATH}" ]]; then
+  echo "Expected AppImage update metadata not found: ${UPDATE_METADATA_PATH}" >&2
+  exit 1
+fi
+
 (
   cd "${DIST_DIR}"
   sha256sum "${ARTIFACT_NAME}" > "$(basename "${CHECKSUM_PATH}")"
@@ -35,3 +41,4 @@ echo "==> AppImage release ready"
 echo "Bundle:   ${ARTIFACT_PATH}"
 echo "Checksum: ${CHECKSUM}"
 echo "SHA file: ${CHECKSUM_PATH}"
+echo "Update:   ${UPDATE_METADATA_PATH}"

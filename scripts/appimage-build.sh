@@ -31,11 +31,9 @@ install -Dm755 "${tmp_agent}" "${RESOURCES_FIGMA_AGENT}"
 
 echo "==> Cleaning transient AppImage build outputs"
 rm -rf "${DIST_DIR}/linux-unpacked" "${DIST_DIR}/__appImage-x64" "${DIST_DIR}/builder-effective-config.yaml"
-rm -f "${DIST_DIR}/latest-linux.yml"
 
 echo "==> Building AppImage"
 npx electron-builder --linux AppImage --x64 --publish never
 
 echo "==> Removing transient AppImage build outputs"
 rm -rf "${DIST_DIR}/linux-unpacked" "${DIST_DIR}/__appImage-x64" "${DIST_DIR}/builder-effective-config.yaml"
-rm -f "${DIST_DIR}/latest-linux.yml"

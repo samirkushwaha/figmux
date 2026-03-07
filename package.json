@@ -52,10 +52,22 @@
       "category": "Graphics",
       "icon": "assets/com.figmux.app.png",
       "artifactName": "figmux-${version}-${arch}.${ext}"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "samirkushwaha",
+        "repo": "figmux",
+        "releaseType": "release",
+        "vPrefixedTagName": true
+      }
+    ]
   },
   "devDependencies": {
     "electron": "31.7.7",
     "electron-builder": "^24.13.3"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.3"
   }
 }

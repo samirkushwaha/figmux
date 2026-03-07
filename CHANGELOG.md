@@ -7,3 +7,4 @@
 - Cleaned release scripts so `dist/` keeps only final user-facing artifacts and checksums.
 - Simplified runtime helper path resolution and shutdown cleanup.
 - Kept the login/captcha mitigation that avoids forcing Windows UA on auth pages.
+- Added AppImage in-app update support via `electron-updater` and GitHub Releases metadata (`latest-linux.yml`).

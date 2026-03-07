@@ -10,8 +10,10 @@ const {
   session,
   ipcMain,
   Menu,
+  dialog,
   webContents: electronWebContents
 } = require('electron');
+const { autoUpdater } = require('electron-updater');
 
 const FIGMA_HOME = 'https://www.figma.com';
 const FIGMA_RECENTS = 'https://www.figma.com/files/recent';
@@ -47,6 +49,8 @@ let tabStateWriteTimer;
 let shellReady = false;
 let bundledFigmaAgentProcess = null;
 let defaultFigmaUserAgent = null;
+let updaterPromptState = 'idle';
+let updateDownloadedVersion = null;
 
 /** @type {Map<string, {id: string, view: import('electron').WebContentsView, title: string, url: string, isLoading: boolean, canGoBack: boolean, canGoForward: boolean}>} */
 const tabs = new Map();
@@ -382,6 +386,111 @@ function stopBundledFigmaAgent() {
   } catch {
     // Best effort cleanup only.
   }
+}
+
+function isAppImageRuntime() {
+  return Boolean(app.isPackaged && process.platform === 'linux' && process.env.APPIMAGE);
+}
+
+function resetUpdateProgress() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.setProgressBar(-1);
+  }
+}
+
+async function promptForDownloadedUpdate(version) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+
+  const { response } = await dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    buttons: ['Restart and Update', 'Later'],
+    defaultId: 0,
+    cancelId: 1,
+    title: 'Update Ready',
+    message: `Figmux ${version} has been downloaded.`,
+    detail: 'Restart now to apply the update.'
+  });
+
+  if (response === 0) {
+    autoUpdater.quitAndInstall();
+  }
+}
+
+async function setupAppImageUpdater() {
+  if (!isAppImageRuntime()) {
+    return;
+  }
+
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on('checking-for-update', () => {
+    updaterPromptState = 'checking';
+  });
+
+  autoUpdater.on('update-available', async (info) => {
+    if (!mainWindow || mainWindow.isDestroyed() || updaterPromptState === 'downloading') {
+      return;
+    }
+
+    updaterPromptState = 'prompting';
+    const { response } = await dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      buttons: ['Download Update', 'Later'],
+      defaultId: 0,
+      cancelId: 1,
+      title: 'Update Available',
+      message: `Figmux ${info.version} is available.`,
+      detail: 'Download the update now and apply it on restart?'
+    });
+
+    if (response === 0) {
+      updaterPromptState = 'downloading';
+      autoUpdater.downloadUpdate().catch((error) => {
+        updaterPromptState = 'idle';
+        resetUpdateProgress();
+        console.warn('[figmux-updater] Failed to download update:', error.message);
+      });
+      return;
+    }
+
+    updaterPromptState = 'idle';
+  });
+
+  autoUpdater.on('download-progress', (progress) => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return;
+    }
+
+    const fraction = Math.max(0, Math.min(1, progress.percent / 100));
+    mainWindow.setProgressBar(fraction);
+  });
+
+  autoUpdater.on('update-not-available', () => {
+    updaterPromptState = 'idle';
+    resetUpdateProgress();
+  });
+
+  autoUpdater.on('update-downloaded', async (info) => {
+    updaterPromptState = 'downloaded';
+    updateDownloadedVersion = info.version || updateDownloadedVersion;
+    resetUpdateProgress();
+    await promptForDownloadedUpdate(updateDownloadedVersion || 'the latest version');
+  });
+
+  autoUpdater.on('error', (error) => {
+    updaterPromptState = 'idle';
+    resetUpdateProgress();
+    console.warn('[figmux-updater] Update check failed:', error.message);
+  });
+
+  setTimeout(() => {
+    autoUpdater.checkForUpdates().catch((error) => {
+      console.warn('[figmux-updater] Unable to check for updates:', error.message);
+    });
+  }, 15000);
 }
 
 function shouldAllowFigmaPermission(permission, requestUrl) {
@@ -1164,6 +1273,7 @@ app.whenReady().then(async () => {
   setupIpc();
   createMainWindow();
   restoreTabs();
+  setupAppImageUpdater();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

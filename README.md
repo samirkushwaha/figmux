@@ -142,6 +142,7 @@ This writes:
 - `dist/figmux-<version>-x86_64.flatpak.sha256`
 - `dist/figmux-<version>-x86_64.AppImage`
 - `dist/figmux-<version>-x86_64.AppImage.sha256`
+- `dist/latest-linux.yml`
 
 Verify checksum:
 
@@ -150,6 +151,8 @@ cd dist
 sha256sum -c figmux-<version>-x86_64.flatpak.sha256
 sha256sum -c figmux-<version>-x86_64.AppImage.sha256
 ```
+
+For AppImage auto-updates, `latest-linux.yml` must be uploaded to the matching GitHub Release alongside the `.AppImage`.
 
 Optional local install + smoke verification:
 
@@ -173,6 +176,22 @@ npm run release:all:verify
 
 See [CHANGELOG.md](./CHANGELOG.md) for release notes.
 
+## Updates
+
+- AppImage builds use in-app update checks via GitHub Releases.
+- On startup, packaged AppImage builds check for a newer release and prompt before downloading.
+- AppImage GitHub releases must include:
+  - `figmux-<version>-x86_64.AppImage`
+  - `figmux-<version>-x86_64.AppImage.sha256`
+  - `latest-linux.yml`
+- Flatpak builds do not use the in-app updater. Update Flatpak manually:
+
+```bash
+flatpak install --user --reinstall ./dist/figmux-<version>-x86_64.flatpak
+```
+
+- GitHub Releases remains the canonical public release page for both AppImage and Flatpak downloads.
+
 ## Publishing checklist
 
 Run before publishing the repo or creating a release:
@@ -188,7 +207,14 @@ After `npm run release:all`, verify:
 - `dist/figmux-<version>-x86_64.flatpak.sha256`
 - `dist/figmux-<version>-x86_64.AppImage`
 - `dist/figmux-<version>-x86_64.AppImage.sha256`
+- `dist/latest-linux.yml`
 - `package.json` and `package-lock.json` were bumped to the new patch version
+
+GitHub AppImage updater publishing checklist:
+- push the release commit and tag
+- create a GitHub Release for the matching tag
+- upload `.AppImage`, `.AppImage.sha256`, and `latest-linux.yml`
+- upload Flatpak artifacts and checksum
 
 ## Authentication behavior
 
