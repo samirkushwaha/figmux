@@ -1,6 +1,6 @@
 # Figmux
 
-Figmux is a Linux desktop wrapper for [Figma](https://www.figma.com) built with Electron and Flatpak.
+Figmux is a Linux desktop wrapper for [Figma](https://www.figma.com) built with Electron.
 
 ## Features
 
@@ -15,7 +15,8 @@ Figmux is a Linux desktop wrapper for [Figma](https://www.figma.com) built with 
 - Reflows active content correctly on resize, maximize, unmaximize, and fullscreen transitions.
 - Uses overlay-native window controls and adapts tab colors to light/dark system theme.
 - Ships with Flatpak metadata for app ID `com.figmux.app`.
-- Flatpak builds bundle `figma-agent-linux` and auto-start it for local font support in Figma.
+- Flatpak and AppImage builds bundle `figma-agent-linux` (https://github.com/neetly/figma-agent-linux) and auto-start it for local font support in Figma.
+All thanks to Neetly for creating this super useful figma agent.
 
 ## Prerequisites
 
@@ -73,6 +74,21 @@ Install locally and run:
 npm run flatpak:run
 ```
 
+## AppImage build and run
+
+Build AppImage:
+
+```bash
+npm run appimage:build
+```
+
+Run AppImage:
+
+```bash
+chmod +x dist/figmux-<version>-x86_64.AppImage
+./dist/figmux-<version>-x86_64.AppImage
+```
+
 ## Local Flatpak export
 
 This flow creates a local `.flatpak` bundle and installs it so the OS app launcher can open Figmux.
@@ -92,34 +108,56 @@ Notes:
 - Flatpak builds are preconfigured for Figma local fonts (bundled `figma-agent` on `127.0.0.1:44950`).
 - Local Electron development (`npm run dev`) does not bundle `figma-agent`; use an external/local listener if you need fonts.
 
-## Shareable release bundle
+## Shareable release bundles
 
-Build a versioned shareable Flatpak bundle:
+Build versioned artifacts for both Flatpak and AppImage (single patch bump):
+
+```bash
+npm run release:all
+```
+
+This command auto-increments the patch version (`x.y.z` -> `x.y.(z+1)`) once, then builds both package formats.
+
+Build only Flatpak artifact (no version bump):
 
 ```bash
 npm run flatpak:release
 ```
 
-This command auto-increments the patch version (`x.y.z` -> `x.y.(z+1)`) before building.
+Build only AppImage artifact (no version bump):
+
+```bash
+npm run appimage:release
+```
+
+Combined entrypoint variants (single patch bump):
+
+```bash
+npm run release:all:flatpak
+npm run release:all:appimage
+```
 
 This writes:
 - `dist/figmux-<version>-x86_64.flatpak`
 - `dist/figmux-<version>-x86_64.flatpak.sha256`
+- `dist/figmux-<version>-x86_64.AppImage`
+- `dist/figmux-<version>-x86_64.AppImage.sha256`
 
 Verify checksum:
 
 ```bash
 cd dist
 sha256sum -c figmux-<version>-x86_64.flatpak.sha256
+sha256sum -c figmux-<version>-x86_64.AppImage.sha256
 ```
 
 Optional local install + smoke verification:
 
 ```bash
-npm run flatpak:release:verify
+npm run release:all:verify
 ```
 
-`--verify` checks:
+`release:all:verify` includes Flatpak reinstall/smoke checks:
 - local install from the versioned artifact succeeds
 - `/app/bin/figma-agent` exists in the sandbox
 - `http://127.0.0.1:44950/figma/version` responds while helper process runs
@@ -128,8 +166,12 @@ npm run flatpak:release:verify
 
 - Figmux is an unofficial wrapper and is not affiliated with, endorsed by, or sponsored by Figma.
 - "Figma" and related marks are trademarks of their respective owners.
-- Flatpak builds bundle `figma-agent-linux` (MIT): <https://github.com/neetly/figma-agent-linux>
+- Flatpak and AppImage builds bundle `figma-agent-linux` (MIT): <https://github.com/neetly/figma-agent-linux>
 - See [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) for bundled dependency notices.
+
+## Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md) for release notes.
 
 ## Publishing checklist
 
@@ -138,12 +180,14 @@ Run before publishing the repo or creating a release:
 ```bash
 rg -n "(AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-|BEGIN (RSA|EC|OPENSSH|PRIVATE) KEY|api[_-]?key|secret|token|password|passwd)" -S --hidden --glob '!node_modules/**' --glob '!.git/**'
 npm run lint
-npm run flatpak:release
+npm run release:all
 ```
 
-After `npm run flatpak:release`, verify:
+After `npm run release:all`, verify:
 - `dist/figmux-<version>-x86_64.flatpak`
 - `dist/figmux-<version>-x86_64.flatpak.sha256`
+- `dist/figmux-<version>-x86_64.AppImage`
+- `dist/figmux-<version>-x86_64.AppImage.sha256`
 - `package.json` and `package-lock.json` were bumped to the new patch version
 
 ## Authentication behavior
@@ -178,8 +222,9 @@ If sessions are lost, verify `src/main.js` still uses `partition: "persist:figmu
 - Messages like `GetVSyncParametersIfAvailable() failed` are usually Chromium graphics timing warnings and can be ignored unless you see visible rendering glitches, freezes, or crashes.
 - If local fonts do not appear in Figma:
   - Keep Figmux running and verify the agent endpoint: `curl -fsS http://127.0.0.1:44950/figma/version`
-  - Start Figmux from terminal and watch startup logs for agent warnings: `flatpak run com.figmux.app`
+  - Start Figmux from terminal and watch startup logs for agent warnings: `flatpak run com.figmux.app` or `./dist/figmux-<version>-x86_64.AppImage`
   - Look for `[figmux]` messages such as bundled agent missing/unreachable.
+- AppImage does not require Flatpak runtimes and installs no system package by default.
 - If clicking the OS launcher does nothing:
   - Verify installation: `flatpak list --app | grep com.figmux.app`
   - Run directly to inspect errors: `flatpak run com.figmux.app`

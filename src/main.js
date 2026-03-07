@@ -29,7 +29,8 @@ const WINDOW_CONTROLS_INSET = 112;
 const TAB_STATE_FILE = 'tabs-state.json';
 const APP_ICON_PNG_FILENAME = 'com.figmux.app.png';
 const APP_ICON_SVG_FILENAME = 'com.figmux.app.svg';
-const FIGMA_AGENT_BINARY_PATH = '/app/bin/figma-agent';
+const FLATPAK_FIGMA_AGENT_BINARY_PATH = '/app/bin/figma-agent';
+const APPIMAGE_FIGMA_AGENT_RELATIVE_PATH = path.join('bin', 'figma-agent');
 const FIGMA_AGENT_VERSION_URL = 'http://127.0.0.1:44950/figma/version';
 const FIGMA_AGENT_PROBE_TIMEOUT_MS = 1200;
 const FIGMA_AGENT_STARTUP_WAIT_MS = 600;
@@ -271,6 +272,27 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function resolveFigmaAgentBinaryPath() {
+  const candidatePaths = [FLATPAK_FIGMA_AGENT_BINARY_PATH];
+
+  if (process.resourcesPath) {
+    candidatePaths.push(path.join(process.resourcesPath, APPIMAGE_FIGMA_AGENT_RELATIVE_PATH));
+  }
+
+  candidatePaths.push(
+    path.join(__dirname, '..', 'resources', APPIMAGE_FIGMA_AGENT_RELATIVE_PATH),
+    path.join(process.cwd(), 'resources', APPIMAGE_FIGMA_AGENT_RELATIVE_PATH)
+  );
+
+  for (const candidatePath of candidatePaths) {
+    if (fs.existsSync(candidatePath)) {
+      return candidatePath;
+    }
+  }
+
+  return null;
+}
+
 function probeFigmaAgent(timeoutMs = FIGMA_AGENT_PROBE_TIMEOUT_MS) {
   return new Promise((resolve) => {
     let settled = false;
@@ -307,13 +329,15 @@ async function ensureFigmaAgentReady() {
     return;
   }
 
-  if (!fs.existsSync(FIGMA_AGENT_BINARY_PATH)) {
-    console.warn(`[figmux] Bundled figma-agent not found at ${FIGMA_AGENT_BINARY_PATH}`);
+  const figmaAgentBinaryPath = resolveFigmaAgentBinaryPath();
+
+  if (!figmaAgentBinaryPath) {
+    console.warn('[figmux] Bundled figma-agent not found in known paths');
     return;
   }
 
   try {
-    const child = spawn(FIGMA_AGENT_BINARY_PATH, [], {
+    const child = spawn(figmaAgentBinaryPath, [], {
       stdio: 'ignore',
       windowsHide: true
     });
@@ -1123,6 +1147,8 @@ app.whenReady().then(async () => {
     Menu.setApplicationMenu(null);
   }
 
+  app.on('before-quit', stopBundledFigmaAgent);
+
   const figmaPartitionSession = session.fromPartition(PERSISTENT_PARTITION);
   defaultFigmaUserAgent = figmaPartitionSession.getUserAgent() || null;
 
@@ -1134,10 +1160,6 @@ app.whenReady().then(async () => {
   });
 
   await ensureFigmaAgentReady();
-
-  app.on('before-quit', () => {
-    stopBundledFigmaAgent();
-  });
 
   setupIpc();
   createMainWindow();
@@ -1152,7 +1174,6 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
-  stopBundledFigmaAgent();
   if (process.platform !== 'darwin') {
     app.quit();
   }

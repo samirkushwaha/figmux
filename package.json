@@ -1,7 +1,7 @@
 {
   "name": "figmux",
-  "version": "0.1.1",
-  "description": "Linux desktop wrapper for Figma using Electron and Flatpak",
+  "version": "0.1.2",
+  "description": "Linux desktop wrapper for Figma using Electron with Flatpak and AppImage packaging",
   "main": "src/main.js",
   "license": "MIT",
   "author": "",
@@ -12,10 +12,50 @@
     "lint": "node --check src/main.js && node --check src/preload.js",
     "flatpak:build": "bash scripts/flatpak-build.sh",
     "flatpak:run": "bash scripts/flatpak-run.sh",
-    "flatpak:release": "bash scripts/release-bundle.sh --bump-patch",
-    "flatpak:release:verify": "bash scripts/release-bundle.sh --bump-patch --verify"
+    "flatpak:release": "bash scripts/release-bundle.sh",
+    "flatpak:release:verify": "bash scripts/release-bundle.sh --verify",
+    "appimage:build": "bash scripts/appimage-build.sh",
+    "appimage:release": "bash scripts/appimage-release.sh",
+    "release:all": "bash scripts/release-all.sh --bump-patch",
+    "release:all:verify": "bash scripts/release-all.sh --bump-patch --verify-flatpak",
+    "release:all:appimage": "bash scripts/release-all.sh --bump-patch --appimage-only",
+    "release:all:flatpak": "bash scripts/release-all.sh --bump-patch --flatpak-only"
+  },
+  "build": {
+    "appId": "com.figmux.app",
+    "productName": "Figmux",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "LICENSE",
+      "THIRD_PARTY_NOTICES.md",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/bin/figma-agent",
+        "to": "bin/figma-agent"
+      }
+    ],
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Graphics",
+      "icon": "assets/com.figmux.app.png",
+      "artifactName": "figmux-${version}-${arch}.${ext}"
+    }
   },
   "devDependencies": {
-    "electron": "31.7.7"
+    "electron": "31.7.7",
+    "electron-builder": "^24.13.3"
   }
 }
