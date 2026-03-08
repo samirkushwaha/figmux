@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0
+
+- Improved Linux window integration with working edge snapping, restored Wayland pinch-to-zoom, and better custom title bar behavior.
+- Added in-app update messaging for AppImage downloads and Flatpak release notices.
+- Fixed Figma auth flows to stay in a dedicated popup again, with clearer popup loading feedback.
+- Added tab restore and reordering, including `Ctrl+Shift+T`, drag-and-drop repositioning, and opening child tabs beside their source tab.
+- Improved tab loading and close behavior with correct close animations, active-only close hit targets, and visible loading spinners.
+- Fixed Figma-specific desktop integrations including fullscreen, image clipboard copy, and local font support via Windows browser spoofing plus `local-network-access`.
+- Polished fullscreen layout, Flatpak foreground launch messaging, and other shell/titlebar UX details.
+
 ## 0.2.0
 
 - Upgraded Electron to `38.8.4`, which restores working touchpad pinch-to-zoom on Wayland.

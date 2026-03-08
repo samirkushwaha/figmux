@@ -4,13 +4,17 @@ const windowMinimizeButton = document.getElementById('window-minimize');
 const windowMaximizeButton = document.getElementById('window-maximize');
 const windowMaximizeGlyph = document.getElementById('window-maximize-glyph');
 const windowCloseButton = document.getElementById('window-close');
+const toastRegion = document.getElementById('toast-region');
 const TAB_ANIMATION_MS = 170;
+const TOAST_DURATION_MS = 5200;
 
 let state = {
   activeTabId: null,
   tabs: []
 };
 let hasRenderedInitialTabs = false;
+let activeToastTimer = null;
+let draggedTabId = null;
 const tabElements = new Map();
 const closingTabIds = new Set();
 
@@ -19,6 +23,54 @@ function createIconSpan(name) {
   span.className = `icon icon-${name}`;
   span.setAttribute('aria-hidden', 'true');
   return span;
+}
+
+function showToast(toast) {
+  if (!toastRegion || !toast || typeof toast.message !== 'string' || !toast.message.trim()) {
+    return;
+  }
+
+  if (activeToastTimer) {
+    clearTimeout(activeToastTimer);
+    activeToastTimer = null;
+  }
+
+  toastRegion.textContent = '';
+
+  const toastElement = document.createElement('section');
+  toastElement.className = 'toast';
+
+  if (typeof toast.title === 'string' && toast.title.trim()) {
+    const title = document.createElement('div');
+    title.className = 'toast-title';
+    title.textContent = toast.title;
+    toastElement.append(title);
+  }
+
+  const message = document.createElement('div');
+  message.className = 'toast-message';
+  message.textContent = toast.message;
+  toastElement.append(message);
+
+  toastRegion.append(toastElement);
+  requestAnimationFrame(() => {
+    toastElement.classList.add('is-visible');
+  });
+
+  const duration =
+    typeof toast.durationMs === 'number' && Number.isFinite(toast.durationMs)
+      ? Math.max(2000, toast.durationMs)
+      : TOAST_DURATION_MS;
+
+  activeToastTimer = setTimeout(() => {
+    toastElement.classList.remove('is-visible');
+    setTimeout(() => {
+      if (toastElement.parentElement === toastRegion) {
+        toastElement.remove();
+      }
+    }, 180);
+    activeToastTimer = null;
+  }, duration);
 }
 
 function safeTitle(tab) {
@@ -54,14 +106,58 @@ function requestCloseTab(tabId) {
   }, TAB_ANIMATION_MS);
 }
 
+function indexOfTab(tabId) {
+  return state.tabs.findIndex((tab) => tab.id === tabId);
+}
+
+function clearDragState() {
+  draggedTabId = null;
+  for (const tabButton of tabElements.values()) {
+    tabButton.classList.remove('is-dragging', 'drop-before', 'drop-after');
+  }
+}
+
+function updateDropIndicator(targetButton, clientX) {
+  for (const tabButton of tabElements.values()) {
+    if (tabButton !== targetButton) {
+      tabButton.classList.remove('drop-before', 'drop-after');
+    }
+  }
+
+  if (!targetButton || !draggedTabId || targetButton.dataset.tabId === draggedTabId) {
+    return null;
+  }
+
+  const rect = targetButton.getBoundingClientRect();
+  const dropAfter = clientX > rect.left + rect.width / 2;
+  targetButton.classList.toggle('drop-before', !dropAfter);
+  targetButton.classList.toggle('drop-after', dropAfter);
+
+  const targetIndex = indexOfTab(targetButton.dataset.tabId);
+  if (targetIndex < 0) {
+    return null;
+  }
+
+  return dropAfter ? targetIndex + 1 : targetIndex;
+}
+
 function createTabElement(tab) {
   const tabButton = document.createElement('button');
   tabButton.type = 'button';
   tabButton.className = 'tab';
   tabButton.dataset.tabId = tab.id;
+  tabButton.draggable = true;
+
+  const titleGroup = document.createElement('span');
+  titleGroup.className = 'tab-title-group';
+
+  const spinner = document.createElement('span');
+  spinner.className = 'tab-spinner';
+  spinner.setAttribute('aria-hidden', 'true');
 
   const title = document.createElement('span');
   title.className = 'tab-title';
+  titleGroup.append(spinner, title);
 
   const closeButton = document.createElement('button');
   closeButton.type = 'button';
@@ -77,7 +173,54 @@ function createTabElement(tab) {
     window.figmuxTabs.activate(tab.id);
   });
 
-  tabButton.append(title, closeButton);
+  tabButton.addEventListener('dragstart', (event) => {
+    draggedTabId = tabButton.dataset.tabId;
+    tabButton.classList.add('is-dragging');
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', draggedTabId);
+    }
+  });
+
+  tabButton.addEventListener('dragover', (event) => {
+    if (!draggedTabId) {
+      return;
+    }
+
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'move';
+    }
+    updateDropIndicator(tabButton, event.clientX);
+  });
+
+  tabButton.addEventListener('drop', (event) => {
+    if (!draggedTabId) {
+      return;
+    }
+
+    event.preventDefault();
+    const rawTargetIndex = updateDropIndicator(tabButton, event.clientX);
+    const draggedIndex = indexOfTab(draggedTabId);
+    if (rawTargetIndex === null || draggedIndex < 0) {
+      clearDragState();
+      return;
+    }
+
+    let nextIndex = rawTargetIndex;
+    if (rawTargetIndex > draggedIndex) {
+      nextIndex -= 1;
+    }
+
+    window.figmuxTabs.move(draggedTabId, nextIndex);
+    clearDragState();
+  });
+
+  tabButton.addEventListener('dragend', () => {
+    clearDragState();
+  });
+
+  tabButton.append(titleGroup, closeButton);
   return tabButton;
 }
 
@@ -89,6 +232,7 @@ function updateTabElement(tabButton, tab) {
   tabButton.dataset.tabId = tab.id;
   tabButton.title = titleText;
   tabButton.classList.toggle('active', Boolean(tab.isActive));
+  tabButton.classList.toggle('is-loading', Boolean(tab.isLoading));
   tabButton.removeAttribute('data-removing');
 
   if (!closingTabIds.has(tab.id)) {
@@ -101,6 +245,7 @@ function updateTabElement(tabButton, tab) {
 
 function renderTabs() {
   const nextTabIds = new Set();
+  let orderIndex = 0;
 
   for (const tab of state.tabs) {
     let tabButton = tabElements.get(tab.id);
@@ -113,10 +258,11 @@ function renderTabs() {
 
     updateTabElement(tabButton, tab);
     nextTabIds.add(tab.id);
-
-    if (isNew) {
-      tabsRoot.insertBefore(tabButton, addTabButton);
+    const expectedNode = tabsRoot.children[orderIndex] || addTabButton;
+    if (expectedNode !== tabButton) {
+      tabsRoot.insertBefore(tabButton, expectedNode);
     }
+    orderIndex += 1;
 
     if (isNew && hasRenderedInitialTabs) {
       tabButton.classList.add('is-entering');
@@ -188,7 +334,7 @@ function applyWindowState(windowState) {
 addTabButton.append(createIconSpan('plus'));
 
 addTabButton.addEventListener('click', () => {
-  window.figmuxTabs.create();
+  window.figmuxTabs.create({ sourceTabId: state.activeTabId });
 });
 
 windowMinimizeButton.addEventListener('click', () => {
@@ -218,6 +364,10 @@ window.figmuxTabs.onLayout((layout) => {
 
 window.windowControls.onStateChanged((windowState) => {
   applyWindowState(windowState);
+});
+
+window.appShell.onToast((toast) => {
+  showToast(toast);
 });
 
 window.figmuxTabs.list().then((initialState) => {

@@ -38,15 +38,24 @@ const FIGMA_AGENT_PROBE_TIMEOUT_MS = 1200;
 const FIGMA_AGENT_STARTUP_WAIT_MS = 600;
 const FLATPAK_BITMAP_ICON_DIR = '/app/share/icons/hicolor/512x512/apps';
 const FLATPAK_ICON_DIR = '/app/share/icons/hicolor/scalable/apps';
+const AUTH_POPUP_BASE_TITLE = 'Figmux Login';
+const AUTH_POPUP_SPINNER_FRAMES = ['Loading', 'Loading.', 'Loading..', 'Loading...'];
+const CLOSED_TABS_LIMIT = 20;
 const WINDOWS_CHROMIUM_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36';
-const FIGMA_AGENT_ALLOWED_PERMISSIONS = new Set(['local-fonts', 'unknown']);
+const FIGMA_AGENT_ALLOWED_PERMISSIONS = new Set([
+  'local-fonts',
+  'local-network-access',
+  'unknown'
+]);
 const FIGMA_ALLOWED_WEB_PERMISSIONS = new Set([
   'clipboard-read',
   'clipboard-sanitized-write',
   'clipboard-write',
   'fullscreen'
 ]);
+const GITHUB_RELEASES_LATEST_URL = 'https://api.github.com/repos/samirkushwaha/figmux/releases/latest';
+const FIGMA_AGENT_ORIGIN = 'http://127.0.0.1:44950';
 
 let mainWindow;
 let activeTabId = null;
@@ -62,6 +71,8 @@ let updateDownloadedVersion = null;
 const tabs = new Map();
 /** @type {string[]} */
 const tabOrder = [];
+/** @type {Array<{url: string, title: string, index: number}>} */
+const closedTabs = [];
 
 function resolveAppIconPath() {
   const candidatePaths = [
@@ -185,7 +196,7 @@ function shouldOpenAuthPopup(url, referrerUrl) {
     return true;
   }
 
-  return isOAuthUrl(referrerUrl) && isFigmaUrl(url);
+  return isOAuthUrl(referrerUrl) && Boolean(parseHttpsUrl(url));
 }
 
 function canRestoreUrl(input) {
@@ -254,7 +265,9 @@ function handleTabShortcut(event, input, sourceWebContents = null) {
   const key = (input.key || '').toLowerCase();
   let handled = true;
 
-  if (key === 't') {
+  if (key === 't' && input.shift) {
+    reopenClosedTab();
+  } else if (key === 't') {
     createTab({ activate: true });
   } else if (key === 'w') {
     const tabIdFromSource = findTabIdByWebContents(sourceWebContents);
@@ -418,6 +431,53 @@ function resetUpdateProgress() {
   }
 }
 
+function isFlatpakRuntime() {
+  return Boolean(process.platform === 'linux' && (process.env.FLATPAK_ID || fs.existsSync('/.flatpak-info')));
+}
+
+function emitToast({ title = '', message, durationMs = 5200 } = {}) {
+  if (!mainWindow || mainWindow.isDestroyed() || !shellReady || typeof message !== 'string' || !message.trim()) {
+    return;
+  }
+
+  mainWindow.webContents.send('shell:toast', {
+    title,
+    message,
+    durationMs
+  });
+}
+
+function parseVersionParts(input) {
+  const normalized = String(input || '')
+    .trim()
+    .replace(/^v/i, '');
+  const match = normalized.match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!match) {
+    return null;
+  }
+
+  return match.slice(1).map((part) => Number(part));
+}
+
+function isVersionNewer(candidateVersion, currentVersion) {
+  const candidate = parseVersionParts(candidateVersion);
+  const current = parseVersionParts(currentVersion);
+  if (!candidate || !current) {
+    return false;
+  }
+
+  for (let index = 0; index < candidate.length; index += 1) {
+    if (candidate[index] > current[index]) {
+      return true;
+    }
+    if (candidate[index] < current[index]) {
+      return false;
+    }
+  }
+
+  return false;
+}
+
 async function promptForDownloadedUpdate(version) {
   if (!mainWindow || mainWindow.isDestroyed()) {
     return;
@@ -455,6 +515,16 @@ async function setupAppImageUpdater() {
       return;
     }
 
+    const nextVersion = info && typeof info.version === 'string' ? info.version : '';
+    console.log(
+      `[figmux-updater] Current version ${app.getVersion()}, found version ${nextVersion || 'unknown'}`
+    );
+    if (!nextVersion || !isVersionNewer(nextVersion, app.getVersion())) {
+      updaterPromptState = 'idle';
+      resetUpdateProgress();
+      return;
+    }
+
     updaterPromptState = 'prompting';
     const { response } = await dialog.showMessageBox(mainWindow, {
       type: 'info',
@@ -462,12 +532,17 @@ async function setupAppImageUpdater() {
       defaultId: 0,
       cancelId: 1,
       title: 'Update Available',
-      message: `Figmux ${info.version} is available.`,
+      message: `Figmux ${nextVersion} is available.`,
       detail: 'Download the update now and apply it on restart?'
     });
 
     if (response === 0) {
       updaterPromptState = 'downloading';
+      emitToast({
+        title: 'Downloading Update',
+        message: "Update is downloading. We'll let you know when it's complete.",
+        durationMs: 5200
+      });
       autoUpdater.downloadUpdate().catch((error) => {
         updaterPromptState = 'idle';
         resetUpdateProgress();
@@ -510,6 +585,45 @@ async function setupAppImageUpdater() {
     autoUpdater.checkForUpdates().catch((error) => {
       console.warn('[figmux-updater] Unable to check for updates:', error.message);
     });
+  }, 15000);
+}
+
+async function setupFlatpakUpdateNotice() {
+  if (!isFlatpakRuntime()) {
+    return;
+  }
+
+  setTimeout(async () => {
+    try {
+      const response = await fetch(GITHUB_RELEASES_LATEST_URL, {
+        headers: {
+          Accept: 'application/vnd.github+json',
+          'User-Agent': 'figmux'
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`GitHub releases request failed with ${response.status}`);
+      }
+
+      const release = await response.json();
+      const latestVersion =
+        typeof release.tag_name === 'string' && release.tag_name.trim()
+          ? release.tag_name.trim().replace(/^v/i, '')
+          : '';
+
+      if (!latestVersion || !isVersionNewer(latestVersion, app.getVersion())) {
+        return;
+      }
+
+      emitToast({
+        title: 'Update Available',
+        message: `Figmux ${latestVersion} is available. Update Figmux to get latest updates and fixes.`,
+        durationMs: 7000
+      });
+    } catch (error) {
+      console.warn('[figmux-flatpak-updater] Unable to check for updates:', error.message);
+    }
   }, 15000);
 }
 
@@ -570,6 +684,7 @@ function buildShellWebPreferences() {
 
 function buildTabWebPreferences() {
   return {
+    preload: path.join(__dirname, 'tab-preload.js'),
     contextIsolation: true,
     nodeIntegration: false,
     sandbox: true,
@@ -580,7 +695,7 @@ function buildTabWebPreferences() {
 
 function buildAuthPopupWindowOptions() {
   const options = {
-    title: 'Figmux Login',
+    title: AUTH_POPUP_BASE_TITLE,
     width: 520,
     height: 740,
     minWidth: 440,
@@ -594,6 +709,128 @@ function buildAuthPopupWindowOptions() {
   }
 
   return options;
+}
+
+function configureAuthPopupWindow(authWindow) {
+  if (!authWindow || authWindow.isDestroyed()) {
+    return;
+  }
+
+  authWindow.setMenuBarVisibility(false);
+  authWindow.setTitle(AUTH_POPUP_BASE_TITLE);
+  authWindow.setMinimumSize(440, 600);
+
+  const popupContents = authWindow.webContents;
+  let spinnerTimer = null;
+  let spinnerIndex = 0;
+
+  function getPopupPageTitle() {
+    const title = popupContents.getTitle();
+    return title && title.trim() ? title.trim() : AUTH_POPUP_BASE_TITLE;
+  }
+
+  function stopSpinner() {
+    if (spinnerTimer) {
+      clearInterval(spinnerTimer);
+      spinnerTimer = null;
+    }
+    if (!authWindow.isDestroyed()) {
+      authWindow.setTitle(getPopupPageTitle());
+    }
+  }
+
+  function startSpinner() {
+    if (spinnerTimer || authWindow.isDestroyed()) {
+      return;
+    }
+
+    authWindow.setTitle(`${AUTH_POPUP_SPINNER_FRAMES[spinnerIndex]} ${getPopupPageTitle()}`);
+    spinnerTimer = setInterval(() => {
+      if (authWindow.isDestroyed()) {
+        stopSpinner();
+        return;
+      }
+      spinnerIndex = (spinnerIndex + 1) % AUTH_POPUP_SPINNER_FRAMES.length;
+      authWindow.setTitle(`${AUTH_POPUP_SPINNER_FRAMES[spinnerIndex]} ${getPopupPageTitle()}`);
+    }, 120);
+  }
+
+  attachFigmaUserAgentPolicy(popupContents);
+
+  popupContents.on('did-start-loading', () => {
+    startSpinner();
+  });
+
+  popupContents.on('did-stop-loading', () => {
+    stopSpinner();
+  });
+
+  popupContents.on('page-title-updated', (event, title) => {
+    event.preventDefault();
+    if (authWindow.isDestroyed()) {
+      return;
+    }
+    const nextTitle = title && title.trim() ? title.trim() : AUTH_POPUP_BASE_TITLE;
+    if (spinnerTimer) {
+      authWindow.setTitle(`${AUTH_POPUP_SPINNER_FRAMES[spinnerIndex]} ${nextTitle}`);
+      return;
+    }
+    authWindow.setTitle(nextTitle);
+  });
+
+  authWindow.on('closed', () => {
+    stopSpinner();
+  });
+
+  popupContents.on('will-navigate', (event, url) => {
+    if (!isAllowedAuthOrFigmaUrl(url)) {
+      event.preventDefault();
+      routeExternal(url);
+    }
+  });
+
+  popupContents.setWindowOpenHandler(({ url, referrer }) => {
+    if (shouldOpenAuthPopup(url, referrer.url)) {
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: buildAuthPopupWindowOptions()
+      };
+    }
+
+    routeExternal(url);
+    return { action: 'deny' };
+  });
+}
+
+function openAuthPopup(url) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return null;
+  }
+
+  const authWindow = new BrowserWindow({
+    ...buildAuthPopupWindowOptions(),
+    parent: mainWindow
+  });
+  authWindow.setTitle(`${AUTH_POPUP_SPINNER_FRAMES[0]} ${AUTH_POPUP_BASE_TITLE}`);
+  configureAuthPopupWindow(authWindow);
+  authWindow.loadURL(url);
+  return authWindow;
+}
+
+function rememberClosedTab({ url, title, index }) {
+  if (!url || typeof index !== 'number' || index < 0) {
+    return;
+  }
+
+  closedTabs.push({
+    url,
+    title: title || 'Figma',
+    index
+  });
+
+  if (closedTabs.length > CLOSED_TABS_LIMIT) {
+    closedTabs.shift();
+  }
 }
 
 function canGoBackCompat(webContents) {
@@ -738,6 +975,24 @@ function emitWindowState() {
   });
 }
 
+function moveTab(tabId, targetIndex) {
+  const currentIndex = tabOrder.indexOf(tabId);
+  if (currentIndex < 0 || !Number.isInteger(targetIndex)) {
+    return false;
+  }
+
+  const boundedTargetIndex = Math.max(0, Math.min(targetIndex, tabOrder.length - 1));
+  if (currentIndex === boundedTargetIndex) {
+    return false;
+  }
+
+  tabOrder.splice(currentIndex, 1);
+  tabOrder.splice(boundedTargetIndex, 0, tabId);
+  emitTabsState();
+  queuePersistTabState();
+  return true;
+}
+
 function getTabStatePath() {
   return path.join(app.getPath('userData'), TAB_STATE_FILE);
 }
@@ -763,6 +1018,21 @@ function queuePersistTabState() {
       // Persistence failures should never crash the app.
     }
   }, 300);
+}
+
+function reopenClosedTab() {
+  const lastClosedTab = closedTabs.pop();
+  if (!lastClosedTab) {
+    return null;
+  }
+
+  const insertionIndex = Math.max(0, Math.min(lastClosedTab.index, tabOrder.length));
+  return createTab({
+    url: lastClosedTab.url,
+    activate: true,
+    insertIndex: insertionIndex,
+    title: lastClosedTab.title
+  });
 }
 
 function trackTabState(tab) {
@@ -814,7 +1084,12 @@ function trackTabState(tab) {
     }
 
     if (isFigmaUrl(url)) {
-      createTab({ url, activate: true });
+      const sourceIndex = tabOrder.indexOf(tab.id);
+      createTab({
+        url,
+        activate: true,
+        insertIndex: sourceIndex >= 0 ? sourceIndex + 1 : null
+      });
       return { action: 'deny' };
     }
 
@@ -823,34 +1098,16 @@ function trackTabState(tab) {
   });
 
   webContents.on('did-create-window', (authWindow) => {
-    authWindow.setMenuBarVisibility(false);
-    authWindow.setTitle('Figmux Login');
-    authWindow.setMinimumSize(440, 600);
-
-    const popupContents = authWindow.webContents;
-    attachFigmaUserAgentPolicy(popupContents);
-
-    popupContents.on('will-navigate', (event, url) => {
-      if (!isAllowedAuthOrFigmaUrl(url)) {
-        event.preventDefault();
-        routeExternal(url);
-      }
-    });
-
-    popupContents.setWindowOpenHandler(({ url, referrer }) => {
-      if (shouldOpenAuthPopup(url, referrer.url)) {
-        return {
-          action: 'allow',
-          overrideBrowserWindowOptions: buildAuthPopupWindowOptions()
-        };
-      }
-
-      routeExternal(url);
-      return { action: 'deny' };
-    });
+    configureAuthPopupWindow(authWindow);
   });
 
   webContents.on('will-navigate', (event, url) => {
+    if (isOAuthUrl(url) && !isOAuthUrl(webContents.getURL())) {
+      event.preventDefault();
+      openAuthPopup(url);
+      return;
+    }
+
     if (!isAllowedAuthOrFigmaUrl(url)) {
       event.preventDefault();
       routeExternal(url);
@@ -876,6 +1133,7 @@ function trackTabState(tab) {
     tab.canGoForward = canGoForwardCompat(webContents);
     emitTabsState();
     queuePersistTabState();
+
   });
 
   webContents.on('did-navigate', (_event, url) => {
@@ -1012,7 +1270,7 @@ function activateTab(tabId) {
   queuePersistTabState();
 }
 
-function createTab({ url = FIGMA_RECENTS, activate = true, id = nextTabId() } = {}) {
+function createTab({ url = FIGMA_RECENTS, activate = true, id = nextTabId(), insertIndex = null, title = 'Figma' } = {}) {
   if (!mainWindow || mainWindow.isDestroyed()) {
     return null;
   }
@@ -1026,7 +1284,7 @@ function createTab({ url = FIGMA_RECENTS, activate = true, id = nextTabId() } = 
   const tab = {
     id,
     view,
-    title: 'Figma',
+    title,
     url: safeUrl,
     isLoading: false,
     canGoBack: false,
@@ -1034,7 +1292,12 @@ function createTab({ url = FIGMA_RECENTS, activate = true, id = nextTabId() } = 
   };
 
   tabs.set(id, tab);
-  tabOrder.push(id);
+  if (typeof insertIndex === 'number' && Number.isInteger(insertIndex)) {
+    const safeInsertIndex = Math.max(0, Math.min(insertIndex, tabOrder.length));
+    tabOrder.splice(safeInsertIndex, 0, id);
+  } else {
+    tabOrder.push(id);
+  }
   trackTabState(tab);
 
   if (activate || !activeTabId) {
@@ -1061,6 +1324,11 @@ function closeTab(tabId) {
 
   const tabIndex = tabOrder.indexOf(tabId);
   if (tabIndex >= 0) {
+    rememberClosedTab({
+      url: tab.url,
+      title: tab.title,
+      index: tabIndex
+    });
     tabOrder.splice(tabIndex, 1);
   }
 
@@ -1161,8 +1429,13 @@ function restoreTabs() {
 function setupIpc() {
   ipcMain.handle('tabs:list', () => getTabsSnapshot());
 
-  ipcMain.handle('tabs:create', () => {
-    createTab({ activate: true });
+  ipcMain.handle('tabs:create', (_event, options = {}) => {
+    const sourceTabId = options && typeof options.sourceTabId === 'string' ? options.sourceTabId : null;
+    const sourceIndex = sourceTabId ? tabOrder.indexOf(sourceTabId) : -1;
+    createTab({
+      activate: true,
+      insertIndex: sourceIndex >= 0 ? sourceIndex + 1 : null
+    });
     return getTabsSnapshot();
   });
 
@@ -1182,6 +1455,11 @@ function setupIpc() {
       tab.view.webContents.loadURL(url);
       activateTab(tabId);
     }
+    return getTabsSnapshot();
+  });
+
+  ipcMain.handle('tabs:move', (_event, tabId, targetIndex) => {
+    moveTab(tabId, targetIndex);
     return getTabsSnapshot();
   });
 
@@ -1342,7 +1620,8 @@ app.whenReady().then(async () => {
     const requestingUrl =
       (details && typeof details.requestingUrl === 'string' && details.requestingUrl) ||
       (webContents && !webContents.isDestroyed() ? webContents.getURL() : '');
-    callback(shouldAllowFigmaPermission(permission, requestingUrl));
+    const allowed = shouldAllowFigmaPermission(permission, requestingUrl);
+    callback(allowed);
   });
 
   figmaPartitionSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
@@ -1350,7 +1629,8 @@ app.whenReady().then(async () => {
       (details && typeof details.requestingUrl === 'string' && details.requestingUrl) ||
       requestingOrigin ||
       (webContents && !webContents.isDestroyed() ? webContents.getURL() : '');
-    return shouldAllowFigmaPermission(permission, requestingUrl);
+    const allowed = shouldAllowFigmaPermission(permission, requestingUrl);
+    return allowed;
   });
 
   await ensureFigmaAgentReady();
@@ -1359,6 +1639,7 @@ app.whenReady().then(async () => {
   createMainWindow();
   restoreTabs();
   setupAppImageUpdater();
+  setupFlatpakUpdateNotice();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
