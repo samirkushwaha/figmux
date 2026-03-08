@@ -29,15 +29,24 @@ function safeTitle(tab) {
   return tab.url || 'Figma';
 }
 
-function requestCloseTab(tabId) {
+function beginClosingTab(tabId) {
   if (closingTabIds.has(tabId)) {
-    return;
+    return false;
   }
 
   closingTabIds.add(tabId);
   const tabButton = tabElements.get(tabId);
   if (tabButton) {
+    tabButton.dataset.removing = 'true';
     tabButton.classList.add('is-closing');
+  }
+
+  return true;
+}
+
+function requestCloseTab(tabId) {
+  if (!beginClosingTab(tabId)) {
+    return;
   }
 
   setTimeout(() => {
@@ -91,7 +100,6 @@ function updateTabElement(tabButton, tab) {
 }
 
 function renderTabs() {
-  const fragment = document.createDocumentFragment();
   const nextTabIds = new Set();
 
   for (const tab of state.tabs) {
@@ -104,8 +112,11 @@ function renderTabs() {
     }
 
     updateTabElement(tabButton, tab);
-    fragment.appendChild(tabButton);
     nextTabIds.add(tab.id);
+
+    if (isNew) {
+      tabsRoot.insertBefore(tabButton, addTabButton);
+    }
 
     if (isNew && hasRenderedInitialTabs) {
       tabButton.classList.add('is-entering');
@@ -118,7 +129,6 @@ function renderTabs() {
   if (addTabButton.parentElement !== tabsRoot) {
     tabsRoot.appendChild(addTabButton);
   }
-  tabsRoot.insertBefore(fragment, addTabButton);
 
   for (const [tabId, tabButton] of tabElements.entries()) {
     if (nextTabIds.has(tabId) || tabButton.dataset.removing === 'true') {
@@ -149,16 +159,28 @@ function applyLayout(layout) {
   if (typeof layout.windowControlsInset === 'number') {
     document.documentElement.style.setProperty('--controls-inset', `${layout.windowControlsInset}px`);
   }
+
+  if (typeof layout.useNativeWindowControls === 'boolean') {
+    document.body.classList.toggle('use-native-window-controls', layout.useNativeWindowControls);
+    document.documentElement.classList.toggle('use-native-window-controls', layout.useNativeWindowControls);
+  }
 }
 
 function applyWindowState(windowState) {
-  if (!windowState || typeof windowState.isMaximized !== 'boolean') {
+  if (
+    !windowState ||
+    typeof windowState.isMaximized !== 'boolean' ||
+    typeof windowState.isFullScreen !== 'boolean'
+  ) {
     return;
   }
 
   const maximized = windowState.isMaximized;
+  const fullScreen = windowState.isFullScreen;
   document.body.classList.toggle('is-maximized', maximized);
   document.documentElement.classList.toggle('is-maximized', maximized);
+  document.body.classList.toggle('is-full-screen', fullScreen);
+  document.documentElement.classList.toggle('is-full-screen', fullScreen);
   windowMaximizeButton.setAttribute('aria-label', maximized ? 'Restore window' : 'Maximize window');
   windowMaximizeGlyph.textContent = maximized ? '\u2750' : '\u25A1';
 }
@@ -184,6 +206,10 @@ windowCloseButton.addEventListener('click', () => {
 window.figmuxTabs.onStateChanged((nextState) => {
   state = nextState;
   renderTabs();
+});
+
+window.figmuxTabs.onWillClose((tabId) => {
+  beginClosingTab(tabId);
 });
 
 window.figmuxTabs.onLayout((layout) => {

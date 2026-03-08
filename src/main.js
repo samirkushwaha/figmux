@@ -41,6 +41,12 @@ const FLATPAK_ICON_DIR = '/app/share/icons/hicolor/scalable/apps';
 const WINDOWS_CHROMIUM_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36';
 const FIGMA_AGENT_ALLOWED_PERMISSIONS = new Set(['local-fonts', 'unknown']);
+const FIGMA_ALLOWED_WEB_PERMISSIONS = new Set([
+  'clipboard-read',
+  'clipboard-sanitized-write',
+  'clipboard-write',
+  'fullscreen'
+]);
 
 let mainWindow;
 let activeTabId = null;
@@ -191,6 +197,20 @@ function isControlModified(input) {
     Boolean(input && input.control) ||
     (Array.isArray(input && input.modifiers) && input.modifiers.includes('control'))
   );
+}
+
+function extractZoomDirection(input) {
+  const numericFields = ['scale', 'deltaY', 'wheelDeltaY', 'wheelTicksY', 'delta'];
+  for (const field of numericFields) {
+    const value = input && input[field];
+    if (typeof value === 'number' && Number.isFinite(value) && value !== 0 && value !== 1) {
+      if (field === 'scale') {
+        return value > 1;
+      }
+      return value < 0;
+    }
+  }
+  return null;
 }
 
 function canCanvasZoom(url) {
@@ -494,7 +514,10 @@ async function setupAppImageUpdater() {
 }
 
 function shouldAllowFigmaPermission(permission, requestUrl) {
-  if (!FIGMA_AGENT_ALLOWED_PERMISSIONS.has(permission)) {
+  if (
+    !FIGMA_AGENT_ALLOWED_PERMISSIONS.has(permission) &&
+    !FIGMA_ALLOWED_WEB_PERMISSIONS.has(permission)
+  ) {
     return false;
   }
 
@@ -632,6 +655,70 @@ function getTabsSnapshot() {
   };
 }
 
+function forwardZoomToTab(tab, zoomIn, x = 0, y = 0) {
+  if (!tab || !tab.view || tab.view.webContents.isDestroyed() || !canCanvasZoom(tab.url)) {
+    return false;
+  }
+
+  tab.view.webContents.sendInputEvent({
+    type: 'mouseWheel',
+    x: Math.max(0, Math.round(x)),
+    y: Math.max(0, Math.round(y)),
+    deltaX: 0,
+    deltaY: zoomIn ? -120 : 120,
+    canScroll: true,
+    modifiers: ['control']
+  });
+
+  return true;
+}
+
+function forwardActiveTabZoomInput(input) {
+  if (!activeTabId) {
+    return false;
+  }
+
+  const tab = tabs.get(activeTabId);
+  if (!tab) {
+    return false;
+  }
+
+  const direction = extractZoomDirection(input);
+  if (direction === null) {
+    return false;
+  }
+
+  const x = Number.isFinite(input && input.x) ? input.x : 0;
+  const rawY = Number.isFinite(input && input.y) ? input.y : 0;
+  const y = Math.max(0, rawY - TITLEBAR_HEIGHT);
+  return forwardZoomToTab(tab, direction, x, y);
+}
+
+function forwardActiveTabZoomDirection(zoomDirection) {
+  if (!activeTabId) {
+    return false;
+  }
+
+  const tab = tabs.get(activeTabId);
+  if (!tab) {
+    return false;
+  }
+
+  if (zoomDirection !== 'in' && zoomDirection !== 'out') {
+    return false;
+  }
+
+  return forwardZoomToTab(tab, zoomDirection === 'in', 0, 0);
+}
+
+function emitTabWillClose(tabId) {
+  if (!mainWindow || mainWindow.isDestroyed() || !shellReady || !tabId) {
+    return;
+  }
+
+  mainWindow.webContents.send('tabs:willClose', tabId);
+}
+
 function emitTabsState() {
   if (!mainWindow || mainWindow.isDestroyed() || !shellReady) {
     return;
@@ -646,7 +733,8 @@ function emitWindowState() {
   }
 
   mainWindow.webContents.send('window:stateChanged', {
-    isMaximized: mainWindow.isMaximized()
+    isMaximized: mainWindow.isMaximized(),
+    isFullScreen: mainWindow.isFullScreen()
   });
 }
 
@@ -681,7 +769,6 @@ function trackTabState(tab) {
   const { webContents } = tab.view;
   let forwardingSyntheticZoom = false;
   let pinchUpdateQueued = false;
-  const logInputDebug = inputDebugEnabled;
   const lastPointer = { x: 0, y: 0 };
 
   attachFigmaUserAgentPolicy(webContents);
@@ -689,32 +776,10 @@ function trackTabState(tab) {
   function sendCanvasZoomWheel(zoomIn) {
     forwardingSyntheticZoom = true;
     try {
-      webContents.sendInputEvent({
-        type: 'mouseWheel',
-        x: lastPointer.x,
-        y: lastPointer.y,
-        deltaX: 0,
-        deltaY: zoomIn ? -120 : 120,
-        canScroll: true,
-        modifiers: ['control']
-      });
+      forwardZoomToTab(tab, zoomIn, lastPointer.x, lastPointer.y);
     } finally {
       forwardingSyntheticZoom = false;
     }
-  }
-
-  function extractZoomDirection(input) {
-    const numericFields = ['scale', 'deltaY', 'wheelDeltaY', 'wheelTicksY', 'delta'];
-    for (const field of numericFields) {
-      const value = input && input[field];
-      if (typeof value === 'number' && Number.isFinite(value) && value !== 0 && value !== 1) {
-        if (field === 'scale') {
-          return value > 1;
-        }
-        return value < 0;
-      }
-    }
-    return null;
   }
 
   webContents
@@ -834,20 +899,6 @@ function trackTabState(tab) {
       return;
     }
 
-    if (
-      logInputDebug &&
-      (input.type.startsWith('gesture') || input.type === 'mouseWheel')
-    ) {
-      console.log('[figmux-input]', {
-        type: input.type,
-        input,
-        control: input.control,
-        modifiers: input.modifiers,
-        x: input.x,
-        y: input.y
-      });
-    }
-
     if (input.type === 'gesturePinchUpdate') {
       const direction = extractZoomDirection(input);
       if (direction !== null) {
@@ -866,21 +917,6 @@ function trackTabState(tab) {
       return;
     }
 
-    if (
-      logInputDebug &&
-      mouse &&
-      mouse.type === 'mouseWheel'
-    ) {
-      console.log('[figmux-mouse]', {
-        type: mouse.type,
-        mouse,
-        control: mouse.control,
-        modifiers: mouse.modifiers,
-        x: mouse.x,
-        y: mouse.y
-      });
-    }
-
     if (Number.isFinite(mouse.x) && Number.isFinite(mouse.y)) {
       lastPointer.x = Math.round(mouse.x);
       lastPointer.y = Math.round(mouse.y);
@@ -896,18 +932,28 @@ function trackTabState(tab) {
   });
 
   webContents.on('zoom-changed', (_event, zoomDirection) => {
-    if (logInputDebug) {
-      console.log('[figmux-zoom]', {
-        direction: zoomDirection,
-        url: tab.url
-      });
-    }
     // Keep shell/page zoom at 1x; pinch forwarding is handled from gesture updates.
     webContents.setZoomFactor(1);
   });
 
   webContents.on('before-input-event', (event, input) => {
     handleTabShortcut(event, input, webContents);
+  });
+
+  webContents.on('enter-html-full-screen', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return;
+    }
+
+    mainWindow.setFullScreen(true);
+  });
+
+  webContents.on('leave-html-full-screen', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return;
+    }
+
+    mainWindow.setFullScreen(false);
   });
 }
 
@@ -922,7 +968,7 @@ function updateActiveTabBounds() {
   }
 
   const [width, height] = mainWindow.getContentSize();
-  const tabY = TITLEBAR_HEIGHT;
+  const tabY = mainWindow.isFullScreen() ? 0 : TITLEBAR_HEIGHT;
   active.view.setBounds({
     x: 0,
     y: tabY,
@@ -1010,6 +1056,8 @@ function closeTab(tabId) {
   if (!tab) {
     return;
   }
+
+  emitTabWillClose(tabId);
 
   const tabIndex = tabOrder.indexOf(tabId);
   if (tabIndex >= 0) {
@@ -1165,18 +1213,29 @@ function setupIpc() {
 }
 
 function createMainWindow() {
+  const useNativeTitlebarOverlay = process.platform === 'linux';
   const windowOptions = {
     width: 1360,
     height: 860,
-    minWidth: 960,
+    minWidth: 480,
     minHeight: 640,
     autoHideMenuBar: true,
     title: 'Figmux',
-    frame: false,
-    transparent: true,
-    backgroundColor: '#00000000',
+    backgroundColor: useNativeTitlebarOverlay ? '#0f1014' : '#00000000',
     webPreferences: buildShellWebPreferences()
   };
+
+  if (useNativeTitlebarOverlay) {
+    windowOptions.titleBarStyle = 'hidden';
+    windowOptions.titleBarOverlay = {
+      color: '#2c2c2c',
+      symbolColor: '#ffffff',
+      height: TITLEBAR_HEIGHT
+    };
+  } else {
+    windowOptions.frame = false;
+    windowOptions.transparent = true;
+  }
 
   if (process.platform === 'linux' && appIconPath) {
     windowOptions.icon = appIconPath;
@@ -1202,15 +1261,28 @@ function createMainWindow() {
   mainWindow.on('unmaximize', onWindowGeometryChanged);
   mainWindow.on('enter-full-screen', onWindowGeometryChanged);
   mainWindow.on('leave-full-screen', onWindowGeometryChanged);
+  mainWindow.on('show', onWindowGeometryChanged);
   mainWindow.on('restore', onWindowGeometryChanged);
 
   mainWindow.webContents.on('before-mouse-event', (event, mouse) => {
     if (mouse && mouse.type === 'mouseWheel' && isControlModified(mouse)) {
       event.preventDefault();
+      forwardActiveTabZoomInput(mouse);
     }
   });
 
-  mainWindow.webContents.on('zoom-changed', () => {
+  mainWindow.webContents.on('input-event', (_event, input) => {
+    if (!input) {
+      return;
+    }
+
+    if (input.type === 'gesturePinchUpdate') {
+      forwardActiveTabZoomInput(input);
+    }
+  });
+
+  mainWindow.webContents.on('zoom-changed', (_event, zoomDirection) => {
+    forwardActiveTabZoomDirection(zoomDirection);
     mainWindow.webContents.setZoomFactor(1);
   });
 
@@ -1230,10 +1302,15 @@ function createMainWindow() {
 
   mainWindow.webContents.on('did-finish-load', () => {
     shellReady = true;
+    if (!mainWindow.isVisible()) {
+      mainWindow.show();
+    }
+    mainWindow.focus();
     queueActiveTabBoundsSync();
     mainWindow.webContents.send('tabs:layout', {
       titlebarHeight: TITLEBAR_HEIGHT,
-      windowControlsInset: WINDOW_CONTROLS_INSET
+      windowControlsInset: WINDOW_CONTROLS_INSET,
+      useNativeWindowControls: useNativeTitlebarOverlay
     });
     emitTabsState();
     emitWindowState();
@@ -1266,6 +1343,14 @@ app.whenReady().then(async () => {
       (details && typeof details.requestingUrl === 'string' && details.requestingUrl) ||
       (webContents && !webContents.isDestroyed() ? webContents.getURL() : '');
     callback(shouldAllowFigmaPermission(permission, requestingUrl));
+  });
+
+  figmaPartitionSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
+    const requestingUrl =
+      (details && typeof details.requestingUrl === 'string' && details.requestingUrl) ||
+      requestingOrigin ||
+      (webContents && !webContents.isDestroyed() ? webContents.getURL() : '');
+    return shouldAllowFigmaPermission(permission, requestingUrl);
   });
 
   await ensureFigmaAgentReady();

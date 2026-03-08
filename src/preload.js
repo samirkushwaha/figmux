@@ -6,6 +6,13 @@ contextBridge.exposeInMainWorld('figmuxTabs', {
   close: (tabId) => ipcRenderer.invoke('tabs:close', tabId),
   activate: (tabId) => ipcRenderer.invoke('tabs:activate', tabId),
   navigate: (tabId, url) => ipcRenderer.invoke('tabs:navigate', tabId, url),
+  onWillClose: (handler) => {
+    const listener = (_event, tabId) => handler(tabId);
+    ipcRenderer.on('tabs:willClose', listener);
+    return () => {
+      ipcRenderer.removeListener('tabs:willClose', listener);
+    };
+  },
   onStateChanged: (handler) => {
     const listener = (_event, state) => handler(state);
     ipcRenderer.on('tabs:stateChanged', listener);

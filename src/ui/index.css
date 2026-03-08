@@ -45,6 +45,10 @@ body.is-maximized {
   border-radius: 0;
 }
 
+body.is-full-screen .titlebar {
+  display: none;
+}
+
 .titlebar {
   position: fixed;
   inset: 0 0 auto 0;
@@ -85,11 +89,14 @@ body.is-maximized {
   min-width: 96px;
   max-width: 240px;
   border: 0;
-  border-right: 1px solid var(--stroke);
+  appearance: none;
+  -webkit-appearance: none;
+  box-shadow: inset -1px 0 0 var(--stroke);
   background: transparent;
   color: var(--text-inactive);
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 8px;
   padding: 0 12px;
   margin: 0;
@@ -97,6 +104,7 @@ body.is-maximized {
   font: inherit;
   font-size: 13px;
   font-weight: 500;
+  text-align: left;
   overflow: hidden;
   transition:
     min-width 170ms ease,
@@ -105,8 +113,9 @@ body.is-maximized {
     opacity 170ms ease;
 }
 
-.tab:first-child {
-  border-left: 1px solid var(--stroke);
+.tab:focus,
+.tab:focus-visible {
+  outline: none;
 }
 
 .tab.active {
@@ -130,6 +139,8 @@ body.is-maximized {
 
 .tab-close {
   border: 0;
+  appearance: none;
+  -webkit-appearance: none;
   background: transparent;
   color: var(--icon-color);
   width: 16px;
@@ -141,13 +152,16 @@ body.is-maximized {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex: 0 0 16px;
   cursor: pointer;
   opacity: 0;
+  pointer-events: none;
   transition: opacity 140ms ease;
 }
 
 .tab.active .tab-close {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .tab-close:hover,
@@ -162,6 +176,8 @@ body.is-maximized {
   height: 32px;
   align-self: center;
   border: 0;
+  appearance: none;
+  -webkit-appearance: none;
   background: transparent;
   color: var(--icon-color);
   padding: 8px;
@@ -213,10 +229,17 @@ body.is-maximized {
   justify-content: flex-end;
 }
 
+.use-native-window-controls .window-controls {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .window-control {
   width: 24px;
   height: 24px;
   border: 0;
+  appearance: none;
+  -webkit-appearance: none;
   background: transparent;
   margin: 0;
   padding: 4px;
@@ -300,6 +323,10 @@ body.is-maximized {
   inset: var(--titlebar-height) 0 0 0;
 }
 
+body.is-full-screen .surface {
+  inset: 0;
+}
+
 .tab.is-entering {
   animation: tab-expand 170ms ease;
 }
@@ -311,7 +338,7 @@ body.is-maximized {
   padding-right: 0;
   gap: 0;
   opacity: 0;
-  border-right-color: transparent;
+  box-shadow: none;
   pointer-events: none;
 }
 

@@ -1,7 +1,7 @@
 {
   "name": "figmux",
-  "version": "0.1.2",
-  "description": "Linux desktop wrapper for Figma using Electron with Flatpak and AppImage packaging",
+  "version": "0.2.0",
+  "description": "Dedicated Linux desktop wrapper for Figma",
   "main": "src/main.js",
   "license": "MIT",
   "author": "",
@@ -64,7 +64,7 @@
     ]
   },
   "devDependencies": {
-    "electron": "31.7.7",
+    "electron": "38.8.4",
     "electron-builder": "^24.13.3"
   },
   "dependencies": {
