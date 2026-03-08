@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1
+
+- Fixed Flatpak startup so the app window opens reliably even when `electron-updater` is not available in the bundle.
+- Restored text-field editing focus after Alt-Tab by returning keyboard focus to the active Figma tab when Figmux regains focus.
+
 ## 0.3.0
 
 - Improved Linux window integration with working edge snapping, restored Wayland pinch-to-zoom, and better custom title bar behavior.

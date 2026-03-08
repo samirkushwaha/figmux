@@ -13,7 +13,13 @@ const {
   dialog,
   webContents: electronWebContents
 } = require('electron');
-const { autoUpdater } = require('electron-updater');
+let autoUpdater = null;
+
+try {
+  ({ autoUpdater } = require('electron-updater'));
+} catch (error) {
+  console.warn('[figmux-updater] electron-updater unavailable:', error.message);
+}
 
 const FIGMA_HOME = 'https://www.figma.com';
 const FIGMA_RECENTS = 'https://www.figma.com/files/recent';
@@ -500,6 +506,11 @@ async function promptForDownloadedUpdate(version) {
 
 async function setupAppImageUpdater() {
   if (!isAppImageRuntime()) {
+    return;
+  }
+
+  if (!autoUpdater) {
+    console.warn('[figmux-updater] Skipping AppImage updater because electron-updater is unavailable');
     return;
   }
 
@@ -1242,6 +1253,29 @@ function queueActiveTabBoundsSync() {
   }, 0);
 }
 
+function focusActiveTabWebContents() {
+  if (!mainWindow || mainWindow.isDestroyed() || !activeTabId) {
+    return;
+  }
+
+  const active = tabs.get(activeTabId);
+  if (!active) {
+    return;
+  }
+
+  setTimeout(() => {
+    if (!mainWindow || mainWindow.isDestroyed() || active.view.webContents.isDestroyed()) {
+      return;
+    }
+
+    if (!mainWindow.isFocused()) {
+      return;
+    }
+
+    active.view.webContents.focus();
+  }, 0);
+}
+
 function activateTab(tabId) {
   if (!mainWindow || mainWindow.isDestroyed()) {
     return;
@@ -1541,6 +1575,9 @@ function createMainWindow() {
   mainWindow.on('leave-full-screen', onWindowGeometryChanged);
   mainWindow.on('show', onWindowGeometryChanged);
   mainWindow.on('restore', onWindowGeometryChanged);
+  mainWindow.on('focus', focusActiveTabWebContents);
+  mainWindow.on('show', focusActiveTabWebContents);
+  mainWindow.on('restore', focusActiveTabWebContents);
 
   mainWindow.webContents.on('before-mouse-event', (event, mouse) => {
     if (mouse && mouse.type === 'mouseWheel' && isControlModified(mouse)) {

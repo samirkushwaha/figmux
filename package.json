@@ -1,6 +1,6 @@
 {
   "name": "figmux",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Dedicated Linux desktop wrapper for Figma",
   "main": "src/main.js",
   "license": "MIT",
