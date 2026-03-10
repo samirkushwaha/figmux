@@ -169,8 +169,18 @@ function createTabElement(tab) {
     requestCloseTab(tab.id);
   });
 
-  tabButton.addEventListener('click', () => {
+  tabButton.addEventListener('click', (event) => {
+    if (event.button !== 0) {
+      return;
+    }
+
     window.figmuxTabs.activate(tab.id);
+  });
+
+  tabButton.addEventListener('contextmenu', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    window.figmuxTabs.showContextMenu(tab.id, event.clientX, event.clientY);
   });
 
   tabButton.addEventListener('dragstart', (event) => {
@@ -334,7 +344,7 @@ function applyWindowState(windowState) {
 addTabButton.append(createIconSpan('plus'));
 
 addTabButton.addEventListener('click', () => {
-  window.figmuxTabs.create({ sourceTabId: state.activeTabId });
+  window.figmuxTabs.create();
 });
 
 windowMinimizeButton.addEventListener('click', () => {

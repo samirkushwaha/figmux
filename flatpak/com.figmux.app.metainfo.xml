@@ -16,6 +16,21 @@
       browser partition so session data is retained across restarts.
     </p>
   </description>
+  <releases>
+    <release version="0.3.2" date="2026-03-11">
+      <description>
+        <ul>
+          <li>Added a tab context menu with a reload action for open Figma tabs.</li>
+          <li>Limited tab activation to primary-button clicks so right-click actions stay available.</li>
+          <li>Adjusted the + tab button to create a fresh tab directly.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.3.1" date="2026-03-08"/>
+    <release version="0.3.0" date="2026-03-08"/>
+    <release version="0.2.0" date="2026-03-08"/>
+    <release version="0.1.2" date="2026-03-07"/>
+  </releases>
   <categories>
     <category>Graphics</category>
   </categories>

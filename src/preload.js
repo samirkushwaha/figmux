@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('figmuxTabs', {
   create: (options) => ipcRenderer.invoke('tabs:create', options),
   close: (tabId) => ipcRenderer.invoke('tabs:close', tabId),
   activate: (tabId) => ipcRenderer.invoke('tabs:activate', tabId),
+  showContextMenu: (tabId, x, y) => ipcRenderer.invoke('tabs:showContextMenu', { tabId, x, y }),
   move: (tabId, targetIndex) => ipcRenderer.invoke('tabs:move', tabId, targetIndex),
   navigate: (tabId, url) => ipcRenderer.invoke('tabs:navigate', tabId, url),
   onWillClose: (handler) => {

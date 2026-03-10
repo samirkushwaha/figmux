@@ -1389,6 +1389,16 @@ function closeTab(tabId) {
   }
 }
 
+function reloadTab(tabId) {
+  const tab = tabs.get(tabId);
+  if (!tab || tab.view.webContents.isDestroyed()) {
+    return;
+  }
+
+  tab.view.webContents.reload();
+  activateTab(tabId);
+}
+
 function cycleTabs(reverse) {
   if (tabOrder.length < 2 || !activeTabId) {
     return;
@@ -1480,6 +1490,34 @@ function setupIpc() {
 
   ipcMain.handle('tabs:activate', (_event, tabId) => {
     activateTab(tabId);
+    return getTabsSnapshot();
+  });
+
+  ipcMain.handle('tabs:showContextMenu', (_event, options = {}) => {
+    const tabId = typeof options.tabId === 'string' ? options.tabId : null;
+    const x = Number.isFinite(options.x) ? Math.round(options.x) : undefined;
+    const y = Number.isFinite(options.y) ? Math.round(options.y) : undefined;
+    const tab = tabId ? tabs.get(tabId) : null;
+
+    if (!mainWindow || mainWindow.isDestroyed() || !tab) {
+      return getTabsSnapshot();
+    }
+
+    activateTab(tabId);
+
+    Menu.buildFromTemplate([
+      {
+        label: 'Reload tab',
+        click: () => {
+          reloadTab(tabId);
+        }
+      }
+    ]).popup({
+      window: mainWindow,
+      x,
+      y
+    });
+
     return getTabsSnapshot();
   });
 

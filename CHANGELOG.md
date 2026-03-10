@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.2
+
+- Added a tab context menu with a reload action so an open Figma tab can be refreshed without leaving the tab strip.
+- Limited tab activation to primary-button clicks so secondary-click actions can open the context menu cleanly.
+- Adjusted the `+` tab button to create a fresh tab directly, instead of treating the current tab as the source for placement.
+
 ## 0.3.1
 
 - Fixed Flatpak startup so the app window opens reliably even when `electron-updater` is not available in the bundle.
