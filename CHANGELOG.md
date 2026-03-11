@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.3
+
+- Fixed AppImage desktop integration so the dock icon resolves correctly once the app is installed into the app menu.
+- Added native AppImage update download notifications with coarse progress milestones and a ready notification.
+- Moved the in-app `Downloading Update` toast to the first real download-progress event so it shows more reliably during AppImage updates.
+
 ## 0.3.2
 
 - Added a tab context menu with a reload action so an open Figma tab can be refreshed without leaving the tab strip.

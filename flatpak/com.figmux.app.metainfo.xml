@@ -17,6 +17,15 @@
     </p>
   </description>
   <releases>
+    <release version="0.3.3" date="2026-03-11">
+      <description>
+        <ul>
+          <li>Fixed AppImage desktop integration so the dock icon resolves correctly after app-menu installation.</li>
+          <li>Added native AppImage update download notifications with progress milestones and a ready state.</li>
+          <li>Moved the in-app update toast to the first real download-progress event for more reliable display.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.3.2" date="2026-03-11">
       <description>
         <ul>

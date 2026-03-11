@@ -6,6 +6,7 @@ const {
   app,
   BrowserWindow,
   WebContentsView,
+  Notification,
   shell,
   session,
   ipcMain,
@@ -72,6 +73,8 @@ let bundledFigmaAgentProcess = null;
 let defaultFigmaUserAgent = null;
 let updaterPromptState = 'idle';
 let updateDownloadedVersion = null;
+let updateDownloadToastShown = false;
+let updateDownloadNotificationBucket = -1;
 
 /** @type {Map<string, {id: string, view: import('electron').WebContentsView, title: string, url: string, isLoading: boolean, canGoBack: boolean, canGoForward: boolean}>} */
 const tabs = new Map();
@@ -435,6 +438,27 @@ function resetUpdateProgress() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.setProgressBar(-1);
   }
+  updateDownloadToastShown = false;
+  updateDownloadNotificationBucket = -1;
+}
+
+function showNativeNotification({ title, body } = {}) {
+  if (!Notification || typeof Notification.isSupported !== 'function' || !Notification.isSupported()) {
+    return;
+  }
+
+  if (typeof body !== 'string' || !body.trim()) {
+    return;
+  }
+
+  const notification = new Notification({
+    title: title && title.trim() ? title : 'Figmux',
+    body,
+    icon: appIconPath || undefined,
+    silent: true
+  });
+
+  notification.show();
 }
 
 function isFlatpakRuntime() {
@@ -549,11 +573,6 @@ async function setupAppImageUpdater() {
 
     if (response === 0) {
       updaterPromptState = 'downloading';
-      emitToast({
-        title: 'Downloading Update',
-        message: "Update is downloading. We'll let you know when it's complete.",
-        durationMs: 5200
-      });
       autoUpdater.downloadUpdate().catch((error) => {
         updaterPromptState = 'idle';
         resetUpdateProgress();
@@ -570,7 +589,28 @@ async function setupAppImageUpdater() {
       return;
     }
 
+    if (!updateDownloadToastShown) {
+      updateDownloadToastShown = true;
+      emitToast({
+        title: 'Downloading Update',
+        message: "Update is downloading. We'll let you know when it's complete.",
+        durationMs: 5200
+      });
+      showNativeNotification({
+        title: 'Figmux Update',
+        body: 'Update download started.'
+      });
+    }
+
     const fraction = Math.max(0, Math.min(1, progress.percent / 100));
+    const nextBucket = Math.min(10, Math.max(0, Math.floor(fraction * 10)));
+    if (nextBucket > updateDownloadNotificationBucket) {
+      updateDownloadNotificationBucket = nextBucket;
+      showNativeNotification({
+        title: 'Figmux Update',
+        body: `Downloading update: ${Math.round(fraction * 100)}%`
+      });
+    }
     mainWindow.setProgressBar(fraction);
   });
 
@@ -583,6 +623,10 @@ async function setupAppImageUpdater() {
     updaterPromptState = 'downloaded';
     updateDownloadedVersion = info.version || updateDownloadedVersion;
     resetUpdateProgress();
+    showNativeNotification({
+      title: 'Figmux Update Ready',
+      body: `Figmux ${updateDownloadedVersion || 'update'} has been downloaded.`
+    });
     await promptForDownloadedUpdate(updateDownloadedVersion || 'the latest version');
   });
 
@@ -1678,7 +1722,11 @@ function createMainWindow() {
 }
 
 if (process.platform === 'linux') {
-  app.setDesktopName('com.figmux.app.desktop');
+  if (isFlatpakRuntime()) {
+    app.setDesktopName('com.figmux.app.desktop');
+  } else {
+    app.setDesktopName('figmux.desktop');
+  }
 }
 
 app.whenReady().then(async () => {
