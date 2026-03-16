@@ -24,7 +24,13 @@ from figmux.constants import (
     WINDOWS_USER_AGENT_DATA_BRANDS,
 )
 from figmux.debug_js import DOM_EVENT_DEBUG_JS
-from figmux.url_policy import is_allowed_auth_or_figma_url, is_figma_url, is_oauth_url, should_open_auth_popup
+from figmux.url_policy import (
+    is_allowed_auth_or_figma_url,
+    is_blocked_embedded_google_sign_in_url,
+    is_figma_url,
+    is_oauth_url,
+    should_open_auth_popup,
+)
 
 
 def configure_profile(profile: QWebEngineProfile, storage_root, logger) -> None:
@@ -204,6 +210,7 @@ class WindowOpenTarget:
 class FigmuxPage(QWebEnginePage):
     externalUrlRequested = pyqtSignal(str)
     inputDebugMessage = pyqtSignal(dict)
+    embeddedGoogleSignInBlocked = pyqtSignal(str)
 
     def __init__(self, owner: QObject, profile: QWebEngineProfile, tab_id: str, logger, source_tab_id: str | None = None):
         super().__init__(profile, owner)
@@ -277,6 +284,15 @@ class FigmuxPage(QWebEnginePage):
     def _on_new_window_requested(self, request) -> None:
         requested_url = request.requestedUrl().toString()
         current_url = self.url().toString()
+        if is_blocked_embedded_google_sign_in_url(requested_url):
+            self.embeddedGoogleSignInBlocked.emit(requested_url)
+            log_event(
+                self.logger,
+                "embedded_google_sign_in_blocked",
+                tab_id=self.tab_id,
+                url=requested_url,
+            )
+            return
         if should_open_auth_popup(requested_url, current_url):
             target = self.owner.request_window_target(self.tab_id, "popup", requested_url)
         elif is_figma_url(requested_url) or not requested_url:
