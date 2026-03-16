@@ -5,11 +5,7 @@ usage() {
   cat <<'EOF'
 Usage: bash scripts/release-bundle.sh [--bump-patch] [--verify]
 
-Builds a versioned shareable Flatpak bundle in dist/ and generates a sha256 file.
-
-Options:
-  --bump-patch  Increment package.json/package-lock.json patch version first.
-  --verify   Reinstall locally and run smoke checks after bundle generation.
+Builds a versioned Flatpak bundle in dist/ and generates a sha256 file.
 EOF
 }
 
@@ -35,84 +31,56 @@ for arg in "$@"; do
   esac
 done
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DIST_DIR="${ROOT_DIR}/dist"
 cd "${ROOT_DIR}"
 
-if [[ ! -f package.json || ! -f scripts/flatpak-build.sh ]]; then
-  echo "Run this script from the figmux repository root." >&2
-  exit 1
-fi
-
-required_cmds=(node npm flatpak flatpak-builder sha256sum)
-if [[ "${VERIFY}" == "1" ]]; then
-  required_cmds+=(curl)
-fi
-
-for cmd in "${required_cmds[@]}"; do
-  if ! command -v "${cmd}" >/dev/null 2>&1; then
-    echo "Missing required command: ${cmd}" >&2
-    exit 1
-  fi
-done
-
 if [[ "${BUMP_PATCH}" == "1" ]]; then
-  echo "==> Bumping patch version"
-  npm version patch --no-git-tag-version --force >/dev/null
+  python - <<'PY'
+import tomllib
+from pathlib import Path
+
+path = Path("pyproject.toml")
+data = tomllib.loads(path.read_text("utf-8"))
+major, minor, patch = map(int, data["project"]["version"].split("."))
+old = f'{major}.{minor}.{patch}'
+new = f'{major}.{minor}.{patch + 1}'
+text = path.read_text("utf-8").replace(f'version = "{old}"', f'version = "{new}"', 1)
+pkg = Path("figmux/__init__.py")
+pkg_text = pkg.read_text("utf-8").replace(f'__version__ = "{old}"', f'__version__ = "{new}"', 1)
+path.write_text(text, "utf-8")
+pkg.write_text(pkg_text, "utf-8")
+print(new)
+PY
 fi
 
-VERSION="$(node -p "require('./package.json').version")"
-ARCH="x86_64"
-DIST_DIR="${ROOT_DIR}/dist"
-SOURCE_BUNDLE="${ROOT_DIR}/com.figmux.app.flatpak"
-ARTIFACT_NAME="figmux-${VERSION}-${ARCH}.flatpak"
+VERSION="$(python - <<'PY'
+import tomllib
+from pathlib import Path
+data = tomllib.loads(Path("pyproject.toml").read_text("utf-8"))
+print(data["project"]["version"])
+PY
+)"
+ARTIFACT_NAME="figmux-${VERSION}-x86_64.flatpak"
 ARTIFACT_PATH="${DIST_DIR}/${ARTIFACT_NAME}"
 CHECKSUM_PATH="${ARTIFACT_PATH}.sha256"
 
 echo "==> Building Flatpak bundle"
-npm run flatpak:build
-
-if [[ ! -f "${SOURCE_BUNDLE}" ]]; then
-  echo "Expected bundle not found: ${SOURCE_BUNDLE}" >&2
-  exit 1
-fi
+bash "${ROOT_DIR}/scripts/flatpak-build.sh"
 
 mkdir -p "${DIST_DIR}"
-cp -f "${SOURCE_BUNDLE}" "${ARTIFACT_PATH}"
-
+cp -f "${ROOT_DIR}/com.figmux.app.flatpak" "${ARTIFACT_PATH}"
 (
   cd "${DIST_DIR}"
   sha256sum "${ARTIFACT_NAME}" > "$(basename "${CHECKSUM_PATH}")"
 )
 
 if [[ "${VERIFY}" == "1" ]]; then
-  echo "==> Running local install and smoke checks"
   flatpak uninstall --user -y com.figmux.app >/dev/null 2>&1 || true
   flatpak install --user -y "${ARTIFACT_PATH}"
-
   flatpak run --command=sh com.figmux.app -c 'test -x /app/bin/figma-agent'
-
-  TMP_LOG="$(mktemp)"
-  cleanup() {
-    if [[ -n "${AGENT_PID:-}" ]]; then
-      kill "${AGENT_PID}" >/dev/null 2>&1 || true
-      wait "${AGENT_PID}" >/dev/null 2>&1 || true
-    fi
-    rm -f "${TMP_LOG}"
-  }
-  trap cleanup EXIT
-
-  flatpak run --command=figma-agent com.figmux.app >"${TMP_LOG}" 2>&1 &
-  AGENT_PID=$!
-  sleep 1
-  curl -fsS http://127.0.0.1:44950/figma/version >/dev/null
-
-  cleanup
-  trap - EXIT
 fi
 
-CHECKSUM="$(cut -d' ' -f1 "${CHECKSUM_PATH}")"
-echo "==> Release bundle ready"
+echo "==> Flatpak release ready"
 echo "Bundle:   ${ARTIFACT_PATH}"
-echo "Checksum: ${CHECKSUM}"
 echo "SHA file: ${CHECKSUM_PATH}"

@@ -1,10 +1,9 @@
 [Desktop Entry]
 Type=Application
 Name=Figmux
-Comment=Open Figma in a dedicated desktop app
+Comment=Dedicated Linux desktop wrapper for Figma
 Exec=figmux
 Icon=com.figmux.app
-Terminal=false
-Categories=Graphics;Utility;
+Categories=Graphics;
 StartupNotify=true
 StartupWMClass=com.figmux.app

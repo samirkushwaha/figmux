@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export QTWEBENGINEPROCESS_PATH="/app/lib/libexec/QtWebEngineProcess"
+
+exec python3 /app/figmux/main.py "$@"

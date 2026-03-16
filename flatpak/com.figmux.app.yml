@@ -1,9 +1,9 @@
 app-id: com.figmux.app
-runtime: org.freedesktop.Platform
-runtime-version: '24.08'
-sdk: org.freedesktop.Sdk
-base: org.electronjs.Electron2.BaseApp
-base-version: '24.08'
+runtime: org.kde.Platform
+runtime-version: "6.10"
+sdk: org.kde.Sdk
+base: com.riverbankcomputing.PyQt.BaseApp
+base-version: "6.10"
 command: figmux
 
 finish-args:
@@ -13,21 +13,22 @@ finish-args:
   - --socket=wayland
   - --socket=fallback-x11
   - --socket=pulseaudio
+  - --socket=system-bus
+  - --filesystem=host
 
 modules:
   - name: figmux
     buildsystem: simple
     build-commands:
-      - install -Dm755 scripts/figmux /app/bin/figmux
-      - install -Dm755 figma-agent-x86_64-unknown-linux-gnu /app/bin/figma-agent
+      - install -Dm755 flatpak/figmux /app/bin/figmux
       - install -Dm644 flatpak/com.figmux.app.desktop /app/share/applications/com.figmux.app.desktop
       - install -Dm644 flatpak/com.figmux.app.metainfo.xml /app/share/metainfo/com.figmux.app.metainfo.xml
       - install -Dm644 assets/com.figmux.app.svg /app/share/icons/hicolor/scalable/apps/com.figmux.app.svg
       - install -Dm644 assets/com.figmux.app.png /app/share/icons/hicolor/512x512/apps/com.figmux.app.png
+      - install -Dm755 figma-agent-x86_64-unknown-linux-gnu /app/bin/figma-agent
       - mkdir -p /app/figmux
-      - mkdir -p /app/electron
-      - cp -r node_modules/electron/dist/* /app/electron/
-      - cp -r src /app/figmux/src
+      - cp -r figmux /app/figmux/figmux
+      - install -Dm644 main.py /app/figmux/main.py
     sources:
       - type: file
         url: https://github.com/neetly/figma-agent-linux/releases/download/0.4.3/figma-agent-x86_64-unknown-linux-gnu

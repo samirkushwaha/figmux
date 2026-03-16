@@ -2,38 +2,62 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DIST_DIR="${ROOT_DIR}/dist"
+VENV_DIR="${ROOT_DIR}/.venv"
+APPDIR="${ROOT_DIR}/dist/Figmux.AppDir"
+PYI_DIST="${ROOT_DIR}/dist/figmux"
+PYI_BUILD="${ROOT_DIR}/build"
+TOOLS_DIR="${ROOT_DIR}/tools"
+APPIMAGETOOL="${TOOLS_DIR}/appimagetool.AppImage"
 FIGMA_AGENT_URL="https://github.com/neetly/figma-agent-linux/releases/download/0.4.3/figma-agent-x86_64-unknown-linux-gnu"
 FIGMA_AGENT_SHA256="85661938e54ad5f6c4af7101d7a7375b1f0f9f132c0c517530b39eea8388656c"
-RESOURCES_BIN_DIR="${ROOT_DIR}/resources/bin"
-RESOURCES_FIGMA_AGENT="${RESOURCES_BIN_DIR}/figma-agent"
+APPIMAGETOOL_URL="https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
 
-required_cmds=(npm curl sha256sum npx)
-for cmd in "${required_cmds[@]}"; do
-  if ! command -v "${cmd}" >/dev/null 2>&1; then
-    echo "Missing required command: ${cmd}" >&2
-    exit 1
-  fi
-done
+if [[ ! -x "${APPIMAGETOOL}" ]]; then
+  mkdir -p "${TOOLS_DIR}"
+  curl -fsSL "${APPIMAGETOOL_URL}" -o "${APPIMAGETOOL}"
+  chmod +x "${APPIMAGETOOL}"
+fi
 
-mkdir -p "${RESOURCES_BIN_DIR}"
+if [[ ! -d "${VENV_DIR}" ]]; then
+  python3 -m ensurepip --upgrade
+  python3 -m venv "${VENV_DIR}"
+fi
 
-tmp_agent="$(mktemp)"
-cleanup() {
-  rm -f "${tmp_agent}"
-}
-trap cleanup EXIT
+source "${VENV_DIR}/bin/activate"
+python -m pip install --upgrade pip
+python -m pip install -e "${ROOT_DIR}[build]"
 
-echo "==> Downloading bundled figma-agent for AppImage"
-curl -fsSL "${FIGMA_AGENT_URL}" -o "${tmp_agent}"
-echo "${FIGMA_AGENT_SHA256}  ${tmp_agent}" | sha256sum -c -
-install -Dm755 "${tmp_agent}" "${RESOURCES_FIGMA_AGENT}"
+mkdir -p "${ROOT_DIR}/resources/bin"
+TMP_AGENT="$(mktemp)"
+trap 'rm -f "${TMP_AGENT}"' EXIT
+curl -fsSL "${FIGMA_AGENT_URL}" -o "${TMP_AGENT}"
+echo "${FIGMA_AGENT_SHA256}  ${TMP_AGENT}" | sha256sum -c -
+install -Dm755 "${TMP_AGENT}" "${ROOT_DIR}/resources/bin/figma-agent"
 
-echo "==> Cleaning transient AppImage build outputs"
-rm -rf "${DIST_DIR}/linux-unpacked" "${DIST_DIR}/__appImage-x64" "${DIST_DIR}/builder-effective-config.yaml"
+rm -rf "${APPDIR}" "${PYI_DIST}" "${PYI_BUILD}"
+pyinstaller \
+  --noconfirm \
+  --clean \
+  --name figmux \
+  --icon "${ROOT_DIR}/assets/com.figmux.app.png" \
+  --collect-submodules PyQt6.QtWebEngineCore \
+  --collect-submodules PyQt6.QtWebEngineWidgets \
+  --collect-submodules PyQt6.QtWebEngineQuick \
+  --add-data "${ROOT_DIR}/assets:assets" \
+  --add-data "${ROOT_DIR}/resources:resources" \
+  "${ROOT_DIR}/main.py"
 
-echo "==> Building AppImage"
-npx electron-builder --linux AppImage --x64 --publish never
+mkdir -p "${APPDIR}/usr/lib/figmux" "${APPDIR}/usr/bin" "${APPDIR}/usr/share/applications" "${APPDIR}/usr/share/icons/hicolor/scalable/apps" "${APPDIR}/usr/share/icons/hicolor/512x512/apps"
+cp -r "${PYI_DIST}/." "${APPDIR}/usr/lib/figmux/"
+cp "${ROOT_DIR}/flatpak/com.figmux.app.desktop" "${APPDIR}/usr/share/applications/com.figmux.app.desktop"
+cp "${ROOT_DIR}/assets/com.figmux.app.svg" "${APPDIR}/usr/share/icons/hicolor/scalable/apps/com.figmux.app.svg"
+cp "${ROOT_DIR}/assets/com.figmux.app.png" "${APPDIR}/usr/share/icons/hicolor/512x512/apps/com.figmux.app.png"
+install -Dm755 /dev/stdin "${APPDIR}/AppRun" <<'EOF'
+#!/usr/bin/env bash
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "${HERE}/usr/lib/figmux/figmux" "$@"
+EOF
+ln -sf usr/share/icons/hicolor/scalable/apps/com.figmux.app.svg "${APPDIR}/com.figmux.app.svg"
+ln -sf usr/share/applications/com.figmux.app.desktop "${APPDIR}/com.figmux.app.desktop"
 
-echo "==> Removing transient AppImage build outputs"
-rm -rf "${DIST_DIR}/linux-unpacked" "${DIST_DIR}/__appImage-x64" "${DIST_DIR}/builder-effective-config.yaml"
+ARCH=x86_64 "${APPIMAGETOOL}" "${APPDIR}" "${ROOT_DIR}/dist/figmux-x86_64.AppImage"

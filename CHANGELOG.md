@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0
+
+- Replaced the Electron-based mainline app with the PyQt6-based Figmux desktop wrapper.
+- Renamed the application identity to `figmux` / `com.figmux.app` across CLI, packaging, and desktop metadata.
+- Switched app icons and launcher assets to the legacy Figmux branding.
+- Added manual Flatpak and AppImage release scripts for versioned GitHub Release artifacts.
+
 ## 0.3.3
 
 - Fixed AppImage desktop integration so the dock icon resolves correctly once the app is installed into the app menu.

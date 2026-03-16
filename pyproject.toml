@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "figmux"
+version = "0.4.0"
+description = "Dedicated Linux desktop wrapper for Figma built with PyQt6 and QtWebEngine."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "PyQt6>=6.10,<6.11",
+  "PyQt6-WebEngine>=6.10,<6.11",
+]
+
+[project.optional-dependencies]
+build = [
+  "PyInstaller>=6.5",
+]
+
+[project.scripts]
+figmux = "figmux.app:run"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["figmux*"]

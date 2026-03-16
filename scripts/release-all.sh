@@ -4,16 +4,6 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage: bash scripts/release-all.sh [--bump-patch] [--appimage-only] [--flatpak-only] [--verify-flatpak]
-
-Build release artifacts in a deterministic sequence:
-  - Flatpak bundle + checksum
-  - AppImage bundle + checksum
-
-Options:
-  --bump-patch    Increment package patch version once before all releases.
-  --appimage-only Build only AppImage artifacts.
-  --flatpak-only  Build only Flatpak artifacts.
-  --verify-flatpak Run Flatpak reinstall/smoke checks.
 EOF
 }
 
@@ -56,27 +46,45 @@ fi
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="${ROOT_DIR}/dist"
 cd "${ROOT_DIR}"
-
-if [[ "${BUMP_PATCH}" == "1" ]]; then
-  echo "==> Bumping patch version once for all release artifacts"
-  npm version patch --no-git-tag-version --force >/dev/null
-fi
-
-echo "==> Cleaning old release artifacts"
 mkdir -p "${DIST_DIR}"
 rm -f "${DIST_DIR}"/figmux-*.flatpak "${DIST_DIR}"/figmux-*.flatpak.sha256
 rm -f "${DIST_DIR}"/figmux-*.AppImage "${DIST_DIR}"/figmux-*.AppImage.sha256
-rm -rf "${DIST_DIR}/linux-unpacked" "${DIST_DIR}/__appImage-x64" "${DIST_DIR}/builder-effective-config.yaml"
-rm -f "${DIST_DIR}/latest-linux.yml"
+
+if [[ "${APPIMAGE_ONLY}" == "1" && "${BUMP_PATCH}" == "1" ]]; then
+  python - <<'PY'
+import tomllib
+from pathlib import Path
+
+path = Path("pyproject.toml")
+data = tomllib.loads(path.read_text("utf-8"))
+major, minor, patch = map(int, data["project"]["version"].split("."))
+old = f'{major}.{minor}.{patch}'
+new = f'{major}.{minor}.{patch + 1}'
+path.write_text(path.read_text("utf-8").replace(f'version = "{old}"', f'version = "{new}"', 1), "utf-8")
+pkg = Path("figmux/__init__.py")
+pkg.write_text(pkg.read_text("utf-8").replace(f'__version__ = "{old}"', f'__version__ = "{new}"', 1), "utf-8")
+print(new)
+PY
+  BUMP_PATCH=0
+fi
 
 if [[ "${APPIMAGE_ONLY}" != "1" ]]; then
-  if [[ "${VERIFY_FLATPAK}" == "1" ]]; then
-    npm run flatpak:release:verify
+  if [[ "${BUMP_PATCH}" == "1" ]]; then
+    if [[ "${VERIFY_FLATPAK}" == "1" ]]; then
+      bash "${ROOT_DIR}/scripts/release-bundle.sh" --bump-patch --verify
+    else
+      bash "${ROOT_DIR}/scripts/release-bundle.sh" --bump-patch
+    fi
+    BUMP_PATCH=0
   else
-    npm run flatpak:release
+    if [[ "${VERIFY_FLATPAK}" == "1" ]]; then
+      bash "${ROOT_DIR}/scripts/release-bundle.sh" --verify
+    else
+      bash "${ROOT_DIR}/scripts/release-bundle.sh"
+    fi
   fi
 fi
 
 if [[ "${FLATPAK_ONLY}" != "1" ]]; then
-  npm run appimage:release
+  bash "${ROOT_DIR}/scripts/appimage-release.sh"
 fi
