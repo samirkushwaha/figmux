@@ -63,8 +63,20 @@ def build_figma_navigator_spoof_script() -> QWebEngineScript:
   const pathname = window.location.pathname || "/";
   const isFigmaHost = hostname === "figma.com" || hostname.endsWith(".figma.com");
   const authPrefixes = ["/login", "/signup", "/oauth"];
-  const isAuthPath = authPrefixes.some((prefix) => pathname.startsWith(prefix));
-  if (!isFigmaHost || isAuthPath) {{
+  const googleAuthHosts = new Set([
+    "accounts.google.com",
+    "accounts.youtube.com",
+    "oauth2.googleapis.com",
+    "apis.google.com"
+  ]);
+  const isGoogleAuthHost =
+    googleAuthHosts.has(hostname) ||
+    hostname === "google.com" ||
+    hostname.endsWith(".google.com") ||
+    hostname.endsWith(".googleusercontent.com");
+  const isFigmaAuthPath = isFigmaHost && authPrefixes.some((prefix) => pathname.startsWith(prefix));
+  const shouldSpoof = isGoogleAuthHost || isFigmaHost || isFigmaAuthPath;
+  if (!shouldSpoof) {{
     return;
   }}
 
@@ -86,6 +98,7 @@ def build_figma_navigator_spoof_script() -> QWebEngineScript:
   const windowsUserAgent = {json.dumps(WINDOWS_CHROMIUM_USER_AGENT)};
   const windowsPlatform = {json.dumps(WINDOWS_PLATFORM)};
   const brands = {brands};
+  const languages = ["en-US", "en"];
   const appVersion = windowsUserAgent.replace(/^Mozilla\\//, "");
   const baseUserAgentData =
     navigator.userAgentData && typeof navigator.userAgentData === "object"
@@ -149,7 +162,21 @@ def build_figma_navigator_spoof_script() -> QWebEngineScript:
   defineGetter(navigatorPrototype, "platform", () => windowsPlatform);
   defineGetter(navigatorPrototype, "userAgent", () => windowsUserAgent);
   defineGetter(navigatorPrototype, "appVersion", () => appVersion);
+  defineGetter(navigatorPrototype, "vendor", () => "Google Inc.");
+  defineGetter(navigatorPrototype, "language", () => languages[0]);
+  defineGetter(navigatorPrototype, "languages", () => languages);
+  defineGetter(navigatorPrototype, "webdriver", () => false);
   defineGetter(navigatorPrototype, "userAgentData", () => spoofedUserAgentData);
+
+  try {{
+    if (!window.chrome) {{
+      window.chrome = {{}};
+    }}
+    if (!window.chrome.runtime) {{
+      window.chrome.runtime = {{}};
+    }}
+  }} catch (_error) {{
+  }}
 
   if (baseUserAgentData && typeof baseUserAgentData.getHighEntropyValues === "function") {{
     try {{
