@@ -6,6 +6,7 @@
 - Renamed the application identity to `figmux` / `com.figmux.app` across CLI, packaging, and desktop metadata.
 - Switched app icons and launcher assets to the legacy Figmux branding.
 - Added manual Flatpak and AppImage release scripts for versioned GitHub Release artifacts.
+- Fixed the Qt Flatpak auth and local-font integration by keeping login/OAuth pages on the default browser identity while spoofing a lightweight Windows navigator surface only on regular Figma pages.
 
 ## 0.3.3
 

@@ -17,72 +17,26 @@ from PyQt6.QtWebEngineCore import (
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 
 from figmux.app_logging import log_event
-from figmux.constants import (
-    FIGMA_RECENTS,
-    WINDOWS_CHROMIUM_USER_AGENT,
-    WINDOWS_PLATFORM,
-    WINDOWS_USER_AGENT_DATA_BRANDS,
-)
+from figmux.constants import FIGMA_RECENTS, WINDOWS_CHROMIUM_USER_AGENT, WINDOWS_PLATFORM
 from figmux.debug_js import DOM_EVENT_DEBUG_JS
 from figmux.url_policy import (
     is_allowed_auth_or_figma_url,
-    is_blocked_embedded_google_sign_in_url,
+    is_figma_auth_url,
     is_figma_url,
     is_oauth_url,
     should_open_auth_popup,
 )
 
 
-def configure_profile(profile: QWebEngineProfile, storage_root, logger) -> None:
-    storage_root.mkdir(parents=True, exist_ok=True)
-    profile.setPersistentStoragePath(str(storage_root / "storage"))
-    profile.setCachePath(str(storage_root / "cache"))
-    profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.DiskHttpCache)
-    profile.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies)
-    profile.setPersistentPermissionsPolicy(
-        QWebEngineProfile.PersistentPermissionsPolicy.StoreOnDisk
-    )
-    profile.setHttpUserAgent(WINDOWS_CHROMIUM_USER_AGENT)
-    settings = profile.settings()
-    for attr in (
-        QWebEngineSettings.WebAttribute.LocalStorageEnabled,
-        QWebEngineSettings.WebAttribute.JavascriptEnabled,
-        QWebEngineSettings.WebAttribute.JavascriptCanOpenWindows,
-        QWebEngineSettings.WebAttribute.JavascriptCanAccessClipboard,
-        QWebEngineSettings.WebAttribute.JavascriptCanPaste,
-        QWebEngineSettings.WebAttribute.FullScreenSupportEnabled,
-        QWebEngineSettings.WebAttribute.PluginsEnabled,
-        QWebEngineSettings.WebAttribute.WebGLEnabled,
-        QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled,
-        QWebEngineSettings.WebAttribute.TouchEventsApiEnabled,
-        QWebEngineSettings.WebAttribute.NavigateOnDropEnabled,
-    ):
-        settings.setAttribute(attr, True)
-    log_event(logger, "profile_configured", storage=str(storage_root))
-
-
 def build_figma_navigator_spoof_script() -> QWebEngineScript:
-    brands = json.dumps(list(WINDOWS_USER_AGENT_DATA_BRANDS))
     source = f"""
 (() => {{
   const hostname = (window.location.hostname || "").toLowerCase();
   const pathname = window.location.pathname || "/";
   const isFigmaHost = hostname === "figma.com" || hostname.endsWith(".figma.com");
   const authPrefixes = ["/login", "/signup", "/oauth"];
-  const googleAuthHosts = new Set([
-    "accounts.google.com",
-    "accounts.youtube.com",
-    "oauth2.googleapis.com",
-    "apis.google.com"
-  ]);
-  const isGoogleAuthHost =
-    googleAuthHosts.has(hostname) ||
-    hostname === "google.com" ||
-    hostname.endsWith(".google.com") ||
-    hostname.endsWith(".googleusercontent.com");
-  const isFigmaAuthPath = isFigmaHost && authPrefixes.some((prefix) => pathname.startsWith(prefix));
-  const shouldSpoof = isGoogleAuthHost || isFigmaHost || isFigmaAuthPath;
-  if (!shouldSpoof) {{
+  const isAuthPath = authPrefixes.some((prefix) => pathname.startsWith(prefix));
+  if (!isFigmaHost || isAuthPath) {{
     return;
   }}
 
@@ -103,93 +57,11 @@ def build_figma_navigator_spoof_script() -> QWebEngineScript:
   const navigatorPrototype = window.Navigator && window.Navigator.prototype;
   const windowsUserAgent = {json.dumps(WINDOWS_CHROMIUM_USER_AGENT)};
   const windowsPlatform = {json.dumps(WINDOWS_PLATFORM)};
-  const brands = {brands};
-  const languages = ["en-US", "en"];
   const appVersion = windowsUserAgent.replace(/^Mozilla\\//, "");
-  const baseUserAgentData =
-    navigator.userAgentData && typeof navigator.userAgentData === "object"
-      ? navigator.userAgentData
-      : null;
-  const spoofedUserAgentData = {{
-    brands,
-    mobile: false,
-    platform: "Windows",
-    getHighEntropyValues: async (hints) => {{
-      const values = {{}};
-      const requestedHints = Array.isArray(hints) ? hints : [];
-      for (const hint of requestedHints) {{
-        switch (hint) {{
-          case "architecture":
-            values.architecture = "x86";
-            break;
-          case "bitness":
-            values.bitness = "64";
-            break;
-          case "brands":
-            values.brands = brands;
-            break;
-          case "fullVersionList":
-            values.fullVersionList = brands.map((brand) => ({{
-              brand: brand.brand,
-              version: `${{brand.version}}.0.0.0`
-            }}));
-            break;
-          case "mobile":
-            values.mobile = false;
-            break;
-          case "model":
-            values.model = "";
-            break;
-          case "platform":
-            values.platform = "Windows";
-            break;
-          case "platformVersion":
-            values.platformVersion = "19.0.0";
-            break;
-          case "uaFullVersion":
-            values.uaFullVersion = "142.0.0.0";
-            break;
-          case "wow64":
-            values.wow64 = false;
-            break;
-          default:
-            break;
-        }}
-      }}
-      return values;
-    }},
-    toJSON: () => ({{
-      brands,
-      mobile: false,
-      platform: "Windows"
-    }})
-  }};
 
   defineGetter(navigatorPrototype, "platform", () => windowsPlatform);
   defineGetter(navigatorPrototype, "userAgent", () => windowsUserAgent);
   defineGetter(navigatorPrototype, "appVersion", () => appVersion);
-  defineGetter(navigatorPrototype, "vendor", () => "Google Inc.");
-  defineGetter(navigatorPrototype, "language", () => languages[0]);
-  defineGetter(navigatorPrototype, "languages", () => languages);
-  defineGetter(navigatorPrototype, "webdriver", () => false);
-  defineGetter(navigatorPrototype, "userAgentData", () => spoofedUserAgentData);
-
-  try {{
-    if (!window.chrome) {{
-      window.chrome = {{}};
-    }}
-    if (!window.chrome.runtime) {{
-      window.chrome.runtime = {{}};
-    }}
-  }} catch (_error) {{
-  }}
-
-  if (baseUserAgentData && typeof baseUserAgentData.getHighEntropyValues === "function") {{
-    try {{
-      baseUserAgentData.getHighEntropyValues = spoofedUserAgentData.getHighEntropyValues;
-    }} catch (_error) {{
-    }}
-  }}
 }})();
 """
     script = QWebEngineScript()
@@ -201,6 +73,33 @@ def build_figma_navigator_spoof_script() -> QWebEngineScript:
     return script
 
 
+def configure_profile(profile: QWebEngineProfile, storage_root, logger) -> None:
+    storage_root.mkdir(parents=True, exist_ok=True)
+    profile.setPersistentStoragePath(str(storage_root / "storage"))
+    profile.setCachePath(str(storage_root / "cache"))
+    profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.DiskHttpCache)
+    profile.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies)
+    profile.setPersistentPermissionsPolicy(
+        QWebEngineProfile.PersistentPermissionsPolicy.StoreOnDisk
+    )
+    settings = profile.settings()
+    for attr in (
+        QWebEngineSettings.WebAttribute.LocalStorageEnabled,
+        QWebEngineSettings.WebAttribute.JavascriptEnabled,
+        QWebEngineSettings.WebAttribute.JavascriptCanOpenWindows,
+        QWebEngineSettings.WebAttribute.JavascriptCanAccessClipboard,
+        QWebEngineSettings.WebAttribute.JavascriptCanPaste,
+        QWebEngineSettings.WebAttribute.FullScreenSupportEnabled,
+        QWebEngineSettings.WebAttribute.PluginsEnabled,
+        QWebEngineSettings.WebAttribute.WebGLEnabled,
+        QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled,
+        QWebEngineSettings.WebAttribute.TouchEventsApiEnabled,
+        QWebEngineSettings.WebAttribute.NavigateOnDropEnabled,
+    ):
+        settings.setAttribute(attr, True)
+    log_event(logger, "profile_configured", storage=str(storage_root))
+
+
 @dataclass(slots=True)
 class WindowOpenTarget:
     page: QWebEnginePage
@@ -210,7 +109,6 @@ class WindowOpenTarget:
 class FigmuxPage(QWebEnginePage):
     externalUrlRequested = pyqtSignal(str)
     inputDebugMessage = pyqtSignal(dict)
-    embeddedGoogleSignInBlocked = pyqtSignal(str)
 
     def __init__(self, owner: QObject, profile: QWebEngineProfile, tab_id: str, logger, source_tab_id: str | None = None):
         super().__init__(profile, owner)
@@ -284,15 +182,6 @@ class FigmuxPage(QWebEnginePage):
     def _on_new_window_requested(self, request) -> None:
         requested_url = request.requestedUrl().toString()
         current_url = self.url().toString()
-        if is_blocked_embedded_google_sign_in_url(requested_url):
-            self.embeddedGoogleSignInBlocked.emit(requested_url)
-            log_event(
-                self.logger,
-                "embedded_google_sign_in_blocked",
-                tab_id=self.tab_id,
-                url=requested_url,
-            )
-            return
         if should_open_auth_popup(requested_url, current_url):
             target = self.owner.request_window_target(self.tab_id, "popup", requested_url)
         elif is_figma_url(requested_url) or not requested_url:

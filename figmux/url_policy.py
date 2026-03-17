@@ -52,6 +52,13 @@ def is_figma_url(value: str | None) -> bool:
     return host == "figma.com" or host.endswith(".figma.com")
 
 
+def is_figma_auth_url(value: str | None) -> bool:
+    parsed = parse_https_url(value)
+    if not parsed or not is_figma_url(value):
+        return False
+    return any(parsed.path.startswith(prefix) for prefix in FIGMA_AUTH_PATH_PREFIXES)
+
+
 def is_oauth_url(value: str | None) -> bool:
     parsed = parse_https_url(value)
     if not parsed:
@@ -59,24 +66,7 @@ def is_oauth_url(value: str | None) -> bool:
     host = parsed.hostname or ""
     if is_google_auth_domain(host):
         return True
-    if not is_figma_url(value):
-        return False
-    return any(parsed.path.startswith(prefix) for prefix in FIGMA_AUTH_PATH_PREFIXES)
-
-
-def is_google_sso_start_url(value: str | None) -> bool:
-    parsed = parse_https_url(value)
-    if not parsed or not is_figma_url(value):
-        return False
-    return parsed.path.startswith("/start_google_sso")
-
-
-def is_blocked_embedded_google_sign_in_url(value: str | None) -> bool:
-    parsed = parse_https_url(value)
-    if not parsed:
-        return False
-    host = parsed.hostname or ""
-    return is_google_auth_domain(host) or is_google_sso_start_url(value)
+    return is_figma_auth_url(value)
 
 
 def is_allowed_auth_or_figma_url(value: str | None) -> bool:

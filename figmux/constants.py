@@ -10,7 +10,7 @@ ORGANIZATION_DOMAIN = "figmux.app"
 FIGMA_HOME = "https://www.figma.com"
 FIGMA_RECENTS = "https://www.figma.com/files/recent"
 FIGMA_AGENT_VERSION_URL = "http://127.0.0.1:44950/figma/version"
-AUTH_POPUP_TITLE = "Figmux Sign In"
+AUTH_POPUP_TITLE = "Figmux Login"
 SESSION_STATE_FILE = "tabs-state.json"
 WINDOW_MIN_WIDTH = 1080
 WINDOW_MIN_HEIGHT = 720
@@ -20,11 +20,6 @@ WINDOWS_PLATFORM = "Win32"
 WINDOWS_CHROMIUM_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-)
-WINDOWS_USER_AGENT_DATA_BRANDS = (
-    {"brand": "Chromium", "version": "142"},
-    {"brand": "Google Chrome", "version": "142"},
-    {"brand": "Not=A?Brand", "version": "24"},
 )
 
 FIGMA_AGENT_DOWNLOAD_URL = (

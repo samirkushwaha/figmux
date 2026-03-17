@@ -326,7 +326,6 @@ class MainWindow(QMainWindow):
         page = FigmuxPage(self, self.profile, tab_id=tab_id, logger=self.logger, source_tab_id=source_tab_id)
         page.externalUrlRequested.connect(self._open_external_url)
         page.inputDebugMessage.connect(self._handle_input_debug)
-        page.embeddedGoogleSignInBlocked.connect(self._handle_embedded_google_sign_in_blocked)
         return page
 
     def _build_tab(self, tab_id: str, url: str, title: str, source_tab_id: str | None = None) -> TabState:
@@ -539,14 +538,6 @@ class MainWindow(QMainWindow):
 
         QDesktopServices.openUrl(QUrl(url))
         self.show_toast("Opened in browser", url)
-
-    def _handle_embedded_google_sign_in_blocked(self, url: str) -> None:
-        self.show_toast(
-            "Google sign-in unavailable",
-            "Google blocks sign-in from embedded app browsers here. Use the Figma email/password form instead of Continue with Google.",
-            duration_ms=8000,
-        )
-        log_event(self.logger, "embedded_google_sign_in_user_notice", url=url)
 
     def show_toast(self, title: str, message: str, duration_ms: int = 5200) -> None:
         self.toast.show_toast(title, message, duration_ms)
