@@ -7,6 +7,7 @@ APP_NAME = "Figmux"
 ORGANIZATION_NAME = "figmux"
 ORGANIZATION_DOMAIN = "figmux.app"
 AUTH_POPUP_TITLE = f"{APP_NAME} Sign In"
+GITHUB_REPO = "samirkushwaha/figmux"
 
 FIGMA_HOME = "https://www.figma.com"
 FIGMA_RECENTS = "https://www.figma.com/files/recent"

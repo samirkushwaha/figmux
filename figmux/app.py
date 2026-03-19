@@ -10,6 +10,7 @@ from figmux.app_logging import configure_logging
 from figmux.constants import APP_ID, APP_NAME, ASSETS_DIR, ORGANIZATION_DOMAIN, ORGANIZATION_NAME, PROJECT_ROOT
 from figmux.font_helper import FontHelperService
 from figmux.main_window import MainWindow
+from figmux.updater import AppImageUpdater
 
 
 def build_application() -> QApplication:
@@ -31,6 +32,8 @@ def run() -> int:
     app.setAttribute(Qt.ApplicationAttribute.AA_DontCreateNativeWidgetSiblings, True)
     font_helper = FontHelperService(logger, PROJECT_ROOT)
     font_helper.start()
-    window = MainWindow(logger, font_helper)
+    updater = AppImageUpdater(logger, app)
+    window = MainWindow(logger, font_helper, updater)
     window.show()
+    updater.start()
     return app.exec()

@@ -12,8 +12,10 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QDialog,
     QMainWindow,
     QMenu,
+    QPlainTextEdit,
     QPushButton,
     QSizePolicy,
     QStackedWidget,
@@ -36,6 +38,7 @@ from figmux.constants import (
     WINDOW_MIN_WIDTH,
 )
 from figmux.session import SessionState, SessionTabState, load_session, save_session
+from figmux.updater import PendingUpdate
 from figmux.url_policy import can_restore_url
 from figmux.web import FigmuxPage, FigmuxWebView, WindowOpenTarget, configure_profile
 
@@ -163,17 +166,61 @@ class AuthPopupWindow(QMainWindow):
         self.setCentralWidget(view)
 
 
+class UpdateReadyDialog(QDialog):
+    def __init__(self, pending: PendingUpdate, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("Update Ready")
+        self.setModal(True)
+        self.resize(560, 420)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
+
+        title = QLabel("A new update is ready to install", self)
+        title.setObjectName("updateDialogTitle")
+        layout.addWidget(title)
+
+        description = QLabel(
+            f"Figmux version {pending.version} has been downloaded and will be automatically installed on exit",
+            self,
+        )
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        changelog_heading = QLabel("Changelog", self)
+        changelog_heading.setObjectName("updateDialogHeading")
+        layout.addWidget(changelog_heading)
+
+        changelog = QPlainTextEdit(self)
+        changelog.setReadOnly(True)
+        changelog.setPlainText(pending.changelog or "No changelog was provided for this release.")
+        changelog.setObjectName("updateDialogChangelog")
+        layout.addWidget(changelog, 1)
+
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        self.restart_button = QPushButton("Restart now", self)
+        self.dismiss_button = QPushButton("Got it", self)
+        button_row.addWidget(self.restart_button)
+        button_row.addWidget(self.dismiss_button)
+        layout.addLayout(button_row)
+
+
 class MainWindow(QMainWindow):
-    def __init__(self, logger, font_helper):
+    def __init__(self, logger, font_helper, updater):
         super().__init__()
         self.logger = logger
         self.font_helper = font_helper
+        self.updater = updater
         self.profile = self._build_profile()
         self.tab_counter = itertools.count(1)
         self.tabs: dict[str, TabState] = {}
         self.tab_order: list[str] = []
         self.closed_tabs: deque[tuple[str, str, int]] = deque(maxlen=CLOSED_TABS_LIMIT)
         self.popup_windows: list[AuthPopupWindow] = []
+        self.update_dialog: UpdateReadyDialog | None = None
+        self._relaunch_after_update = False
         self.shutting_down = False
         self.persist_timer = QTimer(self)
         self.persist_timer.setSingleShot(True)
@@ -200,6 +247,7 @@ class MainWindow(QMainWindow):
         self._wire_window_controls()
         self._wire_tab_strip()
         self._install_shortcuts()
+        self.updater.updateReady.connect(self._on_update_ready)
         self.restore_session()
 
     def _build_profile(self) -> QWebEngineProfile:
@@ -261,6 +309,25 @@ class MainWindow(QMainWindow):
             }
             #toastTitle {
               font-weight: 600;
+            }
+            #updateDialogTitle {
+              font-size: 20px;
+              font-weight: 700;
+              color: #eff5ff;
+            }
+            #updateDialogHeading {
+              font-size: 12px;
+              font-weight: 700;
+              letter-spacing: 0.08em;
+              color: #bccadf;
+              text-transform: uppercase;
+            }
+            #updateDialogChangelog {
+              background: #0f141c;
+              border: 1px solid rgba(255, 255, 255, 0.08);
+              border-radius: 10px;
+              color: #e8eef9;
+              padding: 10px;
             }
             """
         )
@@ -547,6 +614,28 @@ class MainWindow(QMainWindow):
     def _handle_input_debug(self, payload: dict) -> None:
         log_event(self.logger, "input_debug", **payload)
 
+    def _on_update_ready(self, pending: PendingUpdate) -> None:
+        if self.update_dialog:
+            self.update_dialog.close()
+            self.update_dialog.deleteLater()
+        dialog = UpdateReadyDialog(pending, self)
+        dialog.restart_button.clicked.connect(self._restart_to_install_update)
+        dialog.dismiss_button.clicked.connect(dialog.accept)
+        dialog.finished.connect(lambda _: self._clear_update_dialog())
+        self.update_dialog = dialog
+        dialog.open()
+
+    def _clear_update_dialog(self) -> None:
+        if self.update_dialog:
+            self.update_dialog.deleteLater()
+            self.update_dialog = None
+
+    def _restart_to_install_update(self) -> None:
+        self._relaunch_after_update = True
+        if self.update_dialog:
+            self.update_dialog.close()
+        self.close()
+
     def _update_window_title(self, tab_id: str | None) -> None:
         if not tab_id or tab_id not in self.tabs:
             self.setWindowTitle(APP_NAME)
@@ -587,6 +676,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         self.shutting_down = True
         self.persist_session()
+        self.updater.install_on_exit(relaunch=self._relaunch_after_update)
         for popup in list(self.popup_windows):
             popup.close()
         for tab_id in list(self.tab_order):

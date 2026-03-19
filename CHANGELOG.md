@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.3
+
+- Added AppImage in-app update checking against the latest GitHub Release.
+- Downloaded AppImage updates in the background and staged them for installation on exit.
+- Added an `Update Ready` dialog with release changelog details plus a restart-now option to install the update.
+- Wired AppImage update installation into app shutdown, with optional relaunch after update.
+
 ## 0.4.2
 
 - Recut the current `0.4.x` packaging as `0.4.2` with refreshed Flatpak and AppImage release artifacts.
