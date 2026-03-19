@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.2
+
+- Recut the current `0.4.x` packaging as `0.4.2` with refreshed Flatpak and AppImage release artifacts.
+- Kept the shipped application code aligned with the existing `0.4.1` tree; this release is a version and publishing refresh only.
+
 ## 0.4.1
 
 - Fixed AppImage build and release scripts so version detection works reliably from the script location instead of the caller's current directory.
