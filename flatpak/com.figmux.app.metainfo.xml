@@ -8,10 +8,27 @@
   <developer id="com.figmux">
     <name>Figmux Contributors</name>
   </developer>
+  <url type="homepage">https://github.com/samirkushwaha/figmux</url>
   <description>
     <p>Figmux is an unofficial Linux desktop wrapper for Figma focused on packaged Flatpak and AppImage behavior.</p>
   </description>
+  <releases>
+    <release version="0.4.1" date="2026-03-19">
+      <description>
+        <ul>
+          <li>Fixed AppImage build and release scripts so version detection works reliably from the script location.</li>
+          <li>Added AppImage desktop metadata and bundled metainfo so installed AppImage builds expose the correct app identity and version.</li>
+          <li>Set the Qt desktop file name to com.figmux.app and aligned the auth popup title with the Figmux app name.</li>
+          <li>Kept the PyInstaller spec portable by using repository-relative paths instead of machine-local absolute paths.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.4.0" date="2026-03-17"/>
+    <release version="0.3.3" date="2026-03-11"/>
+    <release version="0.3.2" date="2026-03-11"/>
+  </releases>
   <launchable type="desktop-id">com.figmux.app.desktop</launchable>
+  <content_rating type="oars-1.1"/>
   <categories>
     <category>Graphics</category>
   </categories>

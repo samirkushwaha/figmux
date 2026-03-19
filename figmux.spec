@@ -6,15 +6,16 @@ from PyInstaller.utils.hooks import collect_submodules
 ROOT = Path(__file__).resolve().parent
 
 hiddenimports = []
-hiddenimports += collect_submodules("PyQt6.QtWebEngineCore")
-hiddenimports += collect_submodules("PyQt6.QtWebEngineWidgets")
-hiddenimports += collect_submodules("PyQt6.QtWebEngineQuick")
+hiddenimports += collect_submodules('PyQt6.QtWebEngineCore')
+hiddenimports += collect_submodules('PyQt6.QtWebEngineWidgets')
+hiddenimports += collect_submodules('PyQt6.QtWebEngineQuick')
+
 
 a = Analysis(
-    [str(ROOT / "main.py")],
+    [str(ROOT / 'main.py')],
     pathex=[],
     binaries=[],
-    datas=[(str(ROOT / "assets"), "assets"), (str(ROOT / "resources"), "resources")],
+    datas=[(str(ROOT / 'assets'), 'assets'), (str(ROOT / 'resources'), 'resources')],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
@@ -30,7 +31,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="figmux",
+    name='figmux',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -41,7 +42,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=[str(ROOT / "assets" / "com.figmux.app.png")],
+    icon=[str(ROOT / 'assets' / 'com.figmux.app.png')],
 )
 coll = COLLECT(
     exe,
@@ -50,5 +51,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="figmux",
+    name='figmux',
 )

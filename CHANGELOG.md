@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.1
+
+- Fixed AppImage build and release scripts so version detection works reliably from the script location instead of the caller's current directory.
+- Added AppImage desktop metadata and bundled metainfo so installed AppImage builds expose the correct app identity and version.
+- Set the Qt desktop file name to `com.figmux.app` and aligned the auth popup title with the Figmux app name.
+- Kept the PyInstaller spec portable by using repository-relative paths instead of machine-local absolute paths.
+
 ## 0.4.0
 
 - Replaced the Electron-based mainline app with the PyQt6-based Figmux desktop wrapper.

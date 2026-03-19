@@ -44,6 +44,7 @@ if [[ "${APPIMAGE_ONLY}" == "1" && "${FLATPAK_ONLY}" == "1" ]]; then
 fi
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export ROOT_DIR
 DIST_DIR="${ROOT_DIR}/dist"
 cd "${ROOT_DIR}"
 mkdir -p "${DIST_DIR}"
@@ -52,16 +53,18 @@ rm -f "${DIST_DIR}"/figmux-*.AppImage "${DIST_DIR}"/figmux-*.AppImage.sha256
 
 if [[ "${APPIMAGE_ONLY}" == "1" && "${BUMP_PATCH}" == "1" ]]; then
   python - <<'PY'
+import os
 import tomllib
 from pathlib import Path
 
-path = Path("pyproject.toml")
+root = Path(os.environ["ROOT_DIR"])
+path = root / "pyproject.toml"
 data = tomllib.loads(path.read_text("utf-8"))
 major, minor, patch = map(int, data["project"]["version"].split("."))
 old = f'{major}.{minor}.{patch}'
 new = f'{major}.{minor}.{patch + 1}'
 path.write_text(path.read_text("utf-8").replace(f'version = "{old}"', f'version = "{new}"', 1), "utf-8")
-pkg = Path("figmux/__init__.py")
+pkg = root / "figmux" / "__init__.py"
 pkg.write_text(pkg.read_text("utf-8").replace(f'__version__ = "{old}"', f'__version__ = "{new}"', 1), "utf-8")
 print(new)
 PY

@@ -2,12 +2,15 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export ROOT_DIR
 DIST_DIR="${ROOT_DIR}/dist"
 cd "${ROOT_DIR}"
 VERSION="$(python - <<'PY'
+import os
 import tomllib
 from pathlib import Path
-data = tomllib.loads(Path("pyproject.toml").read_text("utf-8"))
+root = Path(os.environ["ROOT_DIR"])
+data = tomllib.loads((root / "pyproject.toml").read_text("utf-8"))
 print(data["project"]["version"])
 PY
 )"

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "figmux"
-version = "0.4.0"
+version = "0.4.1"
 description = "Dedicated Linux desktop wrapper for Figma built with PyQt6 and QtWebEngine."
 readme = "README.md"
 requires-python = ">=3.11"

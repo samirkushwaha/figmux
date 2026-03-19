@@ -7,7 +7,7 @@ from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
 
 from figmux.app_logging import configure_logging
-from figmux.constants import APP_NAME, ASSETS_DIR, ORGANIZATION_DOMAIN, ORGANIZATION_NAME, PROJECT_ROOT
+from figmux.constants import APP_ID, APP_NAME, ASSETS_DIR, ORGANIZATION_DOMAIN, ORGANIZATION_NAME, PROJECT_ROOT
 from figmux.font_helper import FontHelperService
 from figmux.main_window import MainWindow
 
@@ -17,6 +17,7 @@ def build_application() -> QApplication:
     QApplication.setOrganizationName(ORGANIZATION_NAME)
     QApplication.setOrganizationDomain(ORGANIZATION_DOMAIN)
     app = QApplication(sys.argv)
+    app.setDesktopFileName(APP_ID)
     app.setQuitOnLastWindowClosed(True)
     icon_path = ASSETS_DIR / "com.figmux.app.png"
     if icon_path.exists():

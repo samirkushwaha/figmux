@@ -6,11 +6,11 @@ APP_ID = "com.figmux.app"
 APP_NAME = "Figmux"
 ORGANIZATION_NAME = "figmux"
 ORGANIZATION_DOMAIN = "figmux.app"
+AUTH_POPUP_TITLE = f"{APP_NAME} Sign In"
 
 FIGMA_HOME = "https://www.figma.com"
 FIGMA_RECENTS = "https://www.figma.com/files/recent"
 FIGMA_AGENT_VERSION_URL = "http://127.0.0.1:44950/figma/version"
-AUTH_POPUP_TITLE = "Figmux Login"
 SESSION_STATE_FILE = "tabs-state.json"
 WINDOW_MIN_WIDTH = 1080
 WINDOW_MIN_HEIGHT = 720
