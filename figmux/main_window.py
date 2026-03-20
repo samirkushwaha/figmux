@@ -5,10 +5,11 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
-from PyQt6.QtCore import QPoint, QRect, QStandardPaths, Qt, QTimer, QUrl
-from PyQt6.QtGui import QAction, QKeySequence, QShortcut
+from PyQt6.QtCore import QEasingCurve, QPoint, QPointF, QRect, QRectF, QSize, QStandardPaths, Qt, QTimer, QUrl, QVariantAnimation
+from PyQt6.QtGui import QAction, QColor, QFont, QKeySequence, QPainter, QPen, QShortcut
+from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
-    QApplication,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -23,12 +24,13 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
+from PyQt6.QtWebEngineCore import QWebEngineDownloadRequest, QWebEngineProfile
 
 from figmux.app_logging import log_event
 from figmux.constants import (
     APP_ID,
     APP_NAME,
+    ASSETS_DIR,
     AUTH_POPUP_TITLE,
     CLOSED_TABS_LIMIT,
     FIGMA_RECENTS,
@@ -83,79 +85,592 @@ class ToastOverlay(QFrame):
 
 
 class WindowButton(QPushButton):
-    def __init__(self, text: str, tooltip: str, parent: QWidget):
-        super().__init__(text, parent)
+    def __init__(self, tooltip: str, parent: QWidget):
+        super().__init__(parent)
         self.setToolTip(tooltip)
-        self.setFixedSize(36, 28)
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+
+
+class SvgIconButton(WindowButton):
+    def __init__(
+        self,
+        icon_path: Path,
+        tooltip: str,
+        parent: QWidget,
+        *,
+        icon_size: int = 16,
+        button_size: QSize = QSize(32, 32),
+        icon_opacity: float = 0.7,
+        circle_base_alpha: float = 0.0,
+        circle_hover_alpha: float = 0.24,
+        circle_pressed_alpha: float = 0.64,
+    ):
+        super().__init__(tooltip, parent)
+        self.icon_renderer = QSvgRenderer(str(icon_path), self)
+        self.icon_size = icon_size
+        self.icon_opacity = icon_opacity
+        self.circle_base_alpha = circle_base_alpha
+        self.circle_hover_alpha = circle_hover_alpha
+        self.circle_pressed_alpha = circle_pressed_alpha
+        self.circle_alpha = circle_base_alpha
+        self.circle_animation = QVariantAnimation(self)
+        self.circle_animation.setDuration(140)
+        self.circle_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.circle_animation.valueChanged.connect(self._on_circle_value_changed)
+        self.setFixedSize(button_size)
+        self.setFlat(True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self._animate_circle(self.circle_base_alpha)
+
+    def paintEvent(self, event) -> None:
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        if self.circle_alpha > 0.001:
+            circle_color = QColor(0, 0, 0)
+            circle_color.setAlphaF(max(0.0, min(self.circle_alpha, 1.0)))
+            diameter = min(self.width(), self.height()) - 4
+            circle_rect = QRect(
+                (self.width() - diameter) // 2,
+                (self.height() - diameter) // 2,
+                diameter,
+                diameter,
+            )
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(circle_color)
+            painter.drawEllipse(circle_rect)
+
+        icon_rect = QRect(
+            (self.width() - self.icon_size) // 2,
+            (self.height() - self.icon_size) // 2,
+            self.icon_size,
+            self.icon_size,
+        )
+        painter.save()
+        painter.setOpacity(self.icon_opacity)
+        self.icon_renderer.render(painter, QRectF(icon_rect))
+        painter.restore()
+
+    def enterEvent(self, event) -> None:
+        self._animate_circle(self.circle_hover_alpha)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._animate_circle(self.circle_base_alpha)
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._animate_circle(self.circle_pressed_alpha)
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        super().mouseReleaseEvent(event)
+        target = self.circle_hover_alpha if self.rect().contains(event.position().toPoint()) else self.circle_base_alpha
+        self._animate_circle(target)
+
+    def _on_circle_value_changed(self, value) -> None:
+        self.circle_alpha = float(value)
+        self.update()
+
+    def _animate_circle(self, target: float) -> None:
+        self.circle_animation.stop()
+        self.circle_animation.setStartValue(self.circle_alpha)
+        self.circle_animation.setEndValue(target)
+        self.circle_animation.start()
+
+
+class TitleTabBar(QTabBar):
+    TAB_MIN_WIDTH = 96
+    TAB_MAX_WIDTH = 260
+    TAB_HORIZONTAL_PADDING = 20
+    TAB_TEXT_ICON_GAP = 12
+    TAB_CLOSE_ICON_SIZE = 16
+    TAB_FONT_SIZE = 10
+    HOVER_FILL_ALPHA = 0.16
+    ACTIVE_FILL_ALPHA = 0.24
+    ICON_ALPHA = 0.7
+    CLOSE_HOVER_CIRCLE_ALPHA = 0.24
+    CLOSE_PRESSED_CIRCLE_ALPHA = 0.64
+    ANIMATION_MS = 170
+    SPINNER_SIZE = 14
+    SPINNER_GAP = 8
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.close_icon_renderer = QSvgRenderer(str(ASSETS_DIR / "titlebar-close.svg"), self)
+        self.hovered_tab_id: str | None = None
+        self.hovered_close_tab_id: str | None = None
+        self.pressed_close_tab_id: str | None = None
+        self.tab_hover_progress: dict[str, float] = {}
+        self.close_icon_progress: dict[str, float] = {}
+        self.close_circle_progress: dict[str, float] = {}
+        self.open_progress: dict[str, float] = {}
+        self.close_progress: dict[str, float] = {}
+        self.layout_offsets: dict[str, float] = {}
+        self.closing_tabs: set[str] = set()
+        self.animations: dict[str, QVariantAnimation] = {}
+        self.drag_layout_snapshot: dict[str, QRect] = {}
+        self.drag_active = False
+        self.native_drag_started = False
+        self.drag_offset = QPoint()
+        self.loading_tabs: set[str] = set()
+        self.spinner_angle = 0
+        self.spinner_timer = QTimer(self)
+        self.spinner_timer.setInterval(24)
+        self.spinner_timer.timeout.connect(self._advance_spinner)
+        self.setMovable(True)
+        self.setDocumentMode(True)
+        self.setDrawBase(False)
+        self.setUsesScrollButtons(True)
+        self.setExpanding(False)
+        self.setElideMode(Qt.TextElideMode.ElideRight)
+        self.setMouseTracking(True)
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+        font = QFont(self.font())
+        font.setPointSize(self.TAB_FONT_SIZE)
+        font.setWeight(500)
+        self.setFont(font)
+        self.currentChanged.connect(lambda _index: self._sync_visual_states())
+
+    def tabSizeHint(self, index: int) -> QSize:
+        metrics = self.fontMetrics()
+        text = self.tabText(index)
+        width = (
+            self.TAB_HORIZONTAL_PADDING
+            + metrics.horizontalAdvance(text)
+            + self.TAB_TEXT_ICON_GAP
+            + self.TAB_CLOSE_ICON_SIZE
+            + self.TAB_HORIZONTAL_PADDING
+        )
+        width = max(self.TAB_MIN_WIDTH, min(width, self.TAB_MAX_WIDTH))
+        return QSize(width, TITLEBAR_HEIGHT)
+
+    def paintEvent(self, event) -> None:
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        metrics = self.fontMetrics()
+        stroke_color = QColor("#444444")
+        painter.fillRect(self.rect(), QColor("#2C2C2A"))
+
+        for index in range(self.count()):
+            tab_id = self._tab_id(index)
+            if not tab_id:
+                continue
+            rect = self._animated_tab_rect(index)
+            if not rect.isValid() or rect.width() < 6:
+                continue
+
+            painter.save()
+            painter.setClipRect(rect)
+            active = index == self.currentIndex()
+            hover_progress = self.tab_hover_progress.get(tab_id, 0.0)
+            fill_alpha = self.ACTIVE_FILL_ALPHA if active else self.HOVER_FILL_ALPHA * hover_progress
+            tab_rect = rect.adjusted(0.0, 0.0, -1.0, -1.0)
+            fill_color = QColor(0, 0, 0)
+            fill_color.setAlphaF(fill_alpha)
+            painter.fillRect(tab_rect, fill_color)
+            painter.setPen(QPen(stroke_color, 1))
+            top_left_x = tab_rect.left() + (1.0 if index == 0 else 0.0)
+            painter.drawLine(QPointF(top_left_x, tab_rect.top()), QPointF(tab_rect.right(), tab_rect.top()))
+            painter.drawLine(QPointF(top_left_x, tab_rect.bottom()), QPointF(tab_rect.right(), tab_rect.bottom()))
+            painter.drawLine(QPointF(tab_rect.right(), tab_rect.top()), QPointF(tab_rect.right(), tab_rect.bottom()))
+
+            text_rect = self._tab_text_rect(rect, tab_id)
+            if tab_id in self.loading_tabs:
+                self._paint_spinner(painter, self._spinner_rect(rect))
+            text = metrics.elidedText(self.tabText(index), self.elideMode(), max(0, int(text_rect.width())))
+            text_color = QColor(255, 255, 255, 255 if active else round(255 * 0.7))
+            painter.setPen(text_color)
+            painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
+
+            close_rect = self._close_icon_rect(rect)
+            close_circle_alpha = self.close_circle_progress.get(tab_id, 0.0)
+            if close_circle_alpha > 0.001:
+                circle_color = QColor(0, 0, 0)
+                circle_color.setAlphaF(close_circle_alpha)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(circle_color)
+                painter.drawEllipse(close_rect.adjusted(-4, -4, 4, 4))
+            close_opacity = self.close_icon_progress.get(tab_id, 0.0) * self.ICON_ALPHA
+            if close_opacity > 0.001:
+                painter.save()
+                painter.setOpacity(close_opacity)
+                self.close_icon_renderer.render(painter, QRectF(close_rect))
+                painter.restore()
+            painter.restore()
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            close_tab_id = self._tab_id_at_close_icon(event.position().toPoint())
+            if close_tab_id:
+                self.pressed_close_tab_id = close_tab_id
+                self._sync_visual_states()
+                event.accept()
+                return
+            if self.tabAt(event.position().toPoint()) >= 0:
+                self.drag_layout_snapshot = self.capture_layout()
+            if self.tabAt(event.position().toPoint()) < 0:
+                if not self._start_window_drag(event):
+                    self.drag_active = True
+                    self.native_drag_started = False
+                    self.drag_offset = event.globalPosition().toPoint() - self.window().frameGeometry().topLeft()
+                    self.grabMouse()
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if self.drag_active:
+            self.releaseMouse()
+        self.drag_active = False
+        self.native_drag_started = False
+        if self.pressed_close_tab_id and event.button() == Qt.MouseButton.LeftButton:
+            close_tab_id = self._tab_id_at_close_icon(event.position().toPoint())
+            pressed_tab_id = self.pressed_close_tab_id
+            self.pressed_close_tab_id = None
+            self._sync_visual_states()
+            if close_tab_id == pressed_tab_id:
+                index = self._index_for_tab_id(close_tab_id)
+                if index >= 0:
+                    self.tabCloseRequested.emit(index)
+                event.accept()
+                return
+        self.pressed_close_tab_id = None
+        self._sync_visual_states()
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and not self._tab_id_at_close_icon(event.position().toPoint()):
+            self.window().toggle_maximized()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self.drag_active and not self.window().isMaximized():
+            if not self.native_drag_started and self._start_window_drag(event):
+                self.native_drag_started = True
+                self.releaseMouse()
+                self.drag_active = False
+                event.accept()
+                return
+            self.window().move(event.globalPosition().toPoint() - self.drag_offset)
+            event.accept()
+            return
+        hovered_index = self.tabAt(event.position().toPoint())
+        self.hovered_tab_id = self._tab_id(hovered_index) if hovered_index >= 0 else None
+        self.hovered_close_tab_id = self._tab_id_at_close_icon(event.position().toPoint())
+        self._sync_visual_states()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self.hovered_tab_id = None
+        self.hovered_close_tab_id = None
+        self.pressed_close_tab_id = None
+        self._sync_visual_states()
+        super().leaveEvent(event)
+
+    def capture_layout(self) -> dict[str, QRect]:
+        layout: dict[str, QRect] = {}
+        for index in range(self.count()):
+            tab_id = self._tab_id(index)
+            if tab_id:
+                layout[tab_id] = self.tabRect(index)
+        return layout
+
+    def animate_layout_change(self, previous_layout: dict[str, QRect]) -> None:
+        for index in range(self.count()):
+            tab_id = self._tab_id(index)
+            if not tab_id:
+                continue
+            current_rect = self.tabRect(index)
+            previous_rect = previous_layout.get(tab_id)
+            if previous_rect is None:
+                continue
+            offset = float(previous_rect.x() - current_rect.x())
+            self.layout_offsets[tab_id] = offset
+            self._animate_dict_value("layout", self.layout_offsets, tab_id, 0.0, duration=self.ANIMATION_MS)
+
+    def take_drag_layout_snapshot(self) -> dict[str, QRect]:
+        snapshot = self.drag_layout_snapshot
+        self.drag_layout_snapshot = {}
+        return snapshot
+
+    def animate_open_tab(self, tab_id: str) -> None:
+        self.open_progress[tab_id] = 0.0
+        self._animate_dict_value("open", self.open_progress, tab_id, 1.0, duration=self.ANIMATION_MS)
+        self._sync_visual_states()
+
+    def animate_close_tab(self, tab_id: str, on_finished) -> bool:
+        if tab_id in self.closing_tabs:
+            return True
+        if self._index_for_tab_id(tab_id) < 0:
+            return False
+        self.closing_tabs.add(tab_id)
+        self.close_progress[tab_id] = 1.0
+        self._animate_dict_value(
+            "close",
+            self.close_progress,
+            tab_id,
+            0.0,
+            duration=self.ANIMATION_MS,
+            finished=lambda: self._finish_close_animation(tab_id, on_finished),
+        )
+        return True
+
+    def _finish_close_animation(self, tab_id: str, on_finished) -> None:
+        self.closing_tabs.discard(tab_id)
+        self.close_progress.pop(tab_id, None)
+        self.close_icon_progress.pop(tab_id, None)
+        self.close_circle_progress.pop(tab_id, None)
+        self.tab_hover_progress.pop(tab_id, None)
+        self.layout_offsets.pop(tab_id, None)
+        on_finished()
+
+    def _start_window_drag(self, event) -> bool:
+        window = self.window()
+        handle = window.windowHandle()
+        if handle is not None and handle.startSystemMove():
+            return True
+        if window.isMaximized():
+            return False
+        return False
+
+    def _animated_tab_rect(self, index: int) -> QRectF:
+        rect = QRectF(self.tabRect(index))
+        tab_id = self._tab_id(index)
+        if not tab_id:
+            return rect
+        rect.translate(self.layout_offsets.get(tab_id, 0.0), 0.0)
+        if tab_id in self.closing_tabs:
+            progress = self.close_progress.get(tab_id, 1.0)
+            rect.setWidth(rect.width() * progress)
+            return rect
+        progress = self.open_progress.get(tab_id, 1.0)
+        if progress < 1.0:
+            rect.setWidth(rect.width() * progress)
+        return rect
+
+    def _spinner_rect(self, rect: QRectF) -> QRectF:
+        left = rect.left() + self.TAB_HORIZONTAL_PADDING
+        top = rect.top() + (rect.height() - self.SPINNER_SIZE) / 2
+        return QRectF(left, top, self.SPINNER_SIZE, self.SPINNER_SIZE)
+
+    def _tab_text_rect(self, rect: QRectF, tab_id: str) -> QRectF:
+        left = rect.left() + self.TAB_HORIZONTAL_PADDING
+        if tab_id in self.loading_tabs:
+            left += self.SPINNER_SIZE + self.SPINNER_GAP
+        right = rect.right() - self.TAB_HORIZONTAL_PADDING - self.TAB_CLOSE_ICON_SIZE - self.TAB_TEXT_ICON_GAP
+        return QRectF(left, rect.top(), max(0.0, right - left), rect.height())
+
+    def _close_icon_rect(self, rect: QRectF) -> QRectF:
+        x = rect.right() - self.TAB_HORIZONTAL_PADDING - self.TAB_CLOSE_ICON_SIZE
+        y = rect.top() + (rect.height() - self.TAB_CLOSE_ICON_SIZE) / 2
+        return QRectF(x, y, self.TAB_CLOSE_ICON_SIZE, self.TAB_CLOSE_ICON_SIZE)
+
+    def _tab_id(self, index: int) -> str | None:
+        if index < 0 or index >= self.count():
+            return None
+        tab_id = self.tabData(index)
+        return tab_id if isinstance(tab_id, str) else None
+
+    def _index_for_tab_id(self, tab_id: str | None) -> int:
+        if not tab_id:
+            return -1
+        for index in range(self.count()):
+            if self._tab_id(index) == tab_id:
+                return index
+        return -1
+
+    def _tab_id_at_close_icon(self, point: QPoint) -> str | None:
+        for index in range(self.count()):
+            tab_id = self._tab_id(index)
+            if not tab_id or self.close_icon_progress.get(tab_id, 0.0) <= 0.02:
+                continue
+            rect = self._close_icon_rect(self._animated_tab_rect(index)).adjusted(-6, -6, 6, 6)
+            if rect.contains(QPointF(point)):
+                return tab_id
+        return None
+
+    def _sync_visual_states(self) -> None:
+        for index in range(self.count()):
+            tab_id = self._tab_id(index)
+            if not tab_id:
+                continue
+            active = index == self.currentIndex()
+            hover_target = 1.0 if self.hovered_tab_id == tab_id and not active else 0.0
+            close_target = 1.0 if active or self.hovered_tab_id == tab_id else 0.0
+            circle_target = 0.0
+            if self.pressed_close_tab_id == tab_id:
+                circle_target = self.CLOSE_PRESSED_CIRCLE_ALPHA
+            elif self.hovered_close_tab_id == tab_id:
+                circle_target = self.CLOSE_HOVER_CIRCLE_ALPHA
+            self._animate_dict_value("hover", self.tab_hover_progress, tab_id, hover_target)
+            self._animate_dict_value("close_icon", self.close_icon_progress, tab_id, close_target)
+            self._animate_dict_value("close_circle", self.close_circle_progress, tab_id, circle_target)
+        self.update()
+
+    def set_tab_loading(self, tab_id: str, is_loading: bool) -> None:
+        if is_loading:
+            self.loading_tabs.add(tab_id)
+        else:
+            self.loading_tabs.discard(tab_id)
+        if self.loading_tabs:
+            if not self.spinner_timer.isActive():
+                self.spinner_timer.start()
+        else:
+            self.spinner_timer.stop()
+        self.update()
+
+    def _advance_spinner(self) -> None:
+        self.spinner_angle = (self.spinner_angle + 24) % 360
+        self.update()
+
+    def _paint_spinner(self, painter: QPainter, rect: QRectF) -> None:
+        pen = QPen(QColor(255, 255, 255, round(255 * 0.7)))
+        pen.setWidthF(1.5)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        inset = 1.0
+        spinner_rect = rect.adjusted(inset, inset, -inset, -inset)
+        painter.drawArc(spinner_rect, -self.spinner_angle * 16, 250 * 16)
+
+    def _animate_dict_value(
+        self,
+        group: str,
+        store: dict[str, float],
+        tab_id: str,
+        target: float,
+        *,
+        duration: int = ANIMATION_MS,
+        finished=None,
+    ) -> None:
+        key = f"{group}:{tab_id}"
+        current = store.get(tab_id, 0.0)
+        if abs(current - target) < 0.001:
+            return
+        animation = self.animations.get(key)
+        if animation is None:
+            animation = QVariantAnimation(self)
+            animation.valueChanged.connect(lambda value, data=store, item=tab_id: self._set_store_value(data, item, value))
+            self.animations[key] = animation
+        else:
+            try:
+                animation.finished.disconnect()
+            except TypeError:
+                pass
+        animation.stop()
+        animation.setDuration(duration)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        animation.setStartValue(current)
+        animation.setEndValue(target)
+        if finished is not None:
+            animation.finished.connect(finished)
+        animation.start()
+
+    def _set_store_value(self, store: dict[str, float], tab_id: str, value) -> None:
+        store[tab_id] = float(value)
+        self.update()
 
 
 class TitleBar(QWidget):
     def __init__(self, window: "MainWindow"):
         super().__init__(window)
         self.window = window
-        self.setFixedHeight(TITLEBAR_HEIGHT)
         self.drag_active = False
+        self.native_drag_started = False
         self.drag_offset = QPoint()
-
+        self.setFixedHeight(TITLEBAR_HEIGHT)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 6, 8, 6)
-        layout.setSpacing(6)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
 
-        self.label = QLabel(APP_NAME, self)
-        self.label.setObjectName("titleBrand")
-        self.label.setMinimumWidth(104)
-        layout.addWidget(self.label)
+        self.tab_bar = TitleTabBar(self)
+        self.tab_bar.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        layout.addWidget(self.tab_bar)
 
-        self.tab_bar = QTabBar(self)
-        self.tab_bar.setMovable(True)
-        self.tab_bar.setTabsClosable(True)
-        self.tab_bar.setDocumentMode(True)
-        self.tab_bar.setDrawBase(False)
-        self.tab_bar.setUsesScrollButtons(True)
-        self.tab_bar.setExpanding(False)
-        self.tab_bar.setElideMode(Qt.TextElideMode.ElideRight)
-        self.tab_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        layout.addWidget(self.tab_bar, 1)
-
-        self.add_button = QPushButton("+", self)
+        self.add_button = SvgIconButton(
+            ASSETS_DIR / "titlebar-plus.svg",
+            "New tab",
+            self,
+            icon_size=16,
+            button_size=QSize(32, 32),
+            icon_opacity=0.7,
+            circle_base_alpha=0.0,
+            circle_hover_alpha=0.24,
+            circle_pressed_alpha=0.64,
+        )
         self.add_button.setObjectName("addTabButton")
-        self.add_button.setFixedSize(30, 28)
-        self.add_button.setToolTip("New tab")
         layout.addWidget(self.add_button)
+        layout.addStretch(1)
 
-        self.min_button = WindowButton("~", "Minimize", self)
-        self.max_button = WindowButton("^", "Maximize", self)
-        self.close_button = WindowButton("x", "Close", self)
+        self.close_button = SvgIconButton(
+            ASSETS_DIR / "titlebar-close.svg",
+            "Close",
+            self,
+            icon_size=14,
+            button_size=QSize(32, 32),
+            icon_opacity=0.7,
+            circle_base_alpha=0.24,
+            circle_hover_alpha=0.40,
+            circle_pressed_alpha=0.64,
+        )
         self.close_button.setObjectName("closeButton")
-        layout.addWidget(self.min_button)
-        layout.addWidget(self.max_button)
         layout.addWidget(self.close_button)
 
-    def mouseDoubleClickEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton and self.childAt(event.position().toPoint()) in {self, self.label}:
-            self.window.toggle_maximized()
-            event.accept()
-            return
-        super().mouseDoubleClickEvent(event)
+    def paintEvent(self, event) -> None:
+        del event
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor("#2C2C2A"))
+        painter.setPen(QPen(QColor("#444444"), 1))
+        painter.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
 
     def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton and self.childAt(event.position().toPoint()) in {self, self.label}:
-            self.drag_active = True
-            self.drag_offset = event.globalPosition().toPoint() - self.window.frameGeometry().topLeft()
+        child = self.childAt(event.position().toPoint())
+        if event.button() == Qt.MouseButton.LeftButton and child not in {self.add_button, self.close_button}:
+            handle = self.window.windowHandle()
+            if handle is None or not handle.startSystemMove():
+                self.drag_active = True
+                self.native_drag_started = False
+                self.drag_offset = event.globalPosition().toPoint() - self.window.frameGeometry().topLeft()
+                self.grabMouse()
             event.accept()
             return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
         if self.drag_active and not self.window.isMaximized():
+            if not self.native_drag_started:
+                handle = self.window.windowHandle()
+                if handle is not None and handle.startSystemMove():
+                    self.native_drag_started = True
+                    self.releaseMouse()
+                    self.drag_active = False
+                    event.accept()
+                    return
             self.window.move(event.globalPosition().toPoint() - self.drag_offset)
             event.accept()
             return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
+        if self.drag_active:
+            self.releaseMouse()
         self.drag_active = False
+        self.native_drag_started = False
         super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        child = self.childAt(event.position().toPoint())
+        if event.button() == Qt.MouseButton.LeftButton and child not in {self.add_button, self.close_button}:
+            self.window.toggle_maximized()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
 
 class AuthPopupWindow(QMainWindow):
@@ -217,6 +732,7 @@ class MainWindow(QMainWindow):
         self.tab_counter = itertools.count(1)
         self.tabs: dict[str, TabState] = {}
         self.tab_order: list[str] = []
+        self.active_downloads: dict[int, QWebEngineDownloadRequest] = {}
         self.closed_tabs: deque[tuple[str, str, int]] = deque(maxlen=CLOSED_TABS_LIMIT)
         self.popup_windows: list[AuthPopupWindow] = []
         self.update_dialog: UpdateReadyDialog | None = None
@@ -255,6 +771,7 @@ class MainWindow(QMainWindow):
         profile_root = base_dir / "web-profile"
         profile = QWebEngineProfile(APP_ID, self)
         configure_profile(profile, profile_root, self.logger)
+        profile.downloadRequested.connect(self._on_download_requested)
         return profile
 
     def _apply_styles(self) -> None:
@@ -264,42 +781,30 @@ class MainWindow(QMainWindow):
               background: #11151b;
               color: #eef2f8;
             }
-            #titleBrand {
-              color: #d9e4f5;
-              font-weight: 600;
-              padding-left: 2px;
+            TitleBar {
+              background: #2c2c2a;
+              border-bottom: 1px solid #444444;
             }
-            TitleBar, QTabBar {
-              background: #161d27;
+            QTabBar {
+              background: #2c2c2a;
             }
             QTabBar::tab {
-              background: #202a38;
-              color: #d5dde8;
-              border-radius: 8px;
-              padding: 6px 14px;
-              margin-right: 4px;
-              min-width: 120px;
-              max-width: 260px;
-            }
-            QTabBar::tab:selected {
-              background: #2f4158;
+              background: transparent;
+              border: none;
+              margin: 0;
+              padding: 0;
+              color: transparent;
             }
             QPushButton {
-              background: #233041;
+              background: transparent;
               color: #eff5ff;
               border: none;
-              border-radius: 8px;
-              padding: 4px 8px;
             }
             QPushButton:hover {
-              background: #32475f;
-            }
-            #closeButton:hover {
-              background: #bb3e3e;
+              background: transparent;
             }
             #addTabButton {
-              font-size: 18px;
-              font-weight: 600;
+              margin-right: 0px;
             }
             #toast {
               background: rgba(20, 28, 40, 235);
@@ -333,8 +838,6 @@ class MainWindow(QMainWindow):
         )
 
     def _wire_window_controls(self) -> None:
-        self.title_bar.min_button.clicked.connect(self.showMinimized)
-        self.title_bar.max_button.clicked.connect(self.toggle_maximized)
         self.title_bar.close_button.clicked.connect(self.close)
 
     def _wire_tab_strip(self) -> None:
@@ -350,6 +853,8 @@ class MainWindow(QMainWindow):
         for sequence, callback in (
             ("Ctrl+T", self.open_new_tab_at_end),
             ("Ctrl+W", self.close_active_tab),
+            ("Ctrl+Q", self.close),
+            ("Meta+Q", self.close),
             ("Ctrl+Tab", self.cycle_next_tab),
             ("Ctrl+Shift+Tab", self.cycle_previous_tab),
             ("Ctrl+Shift+T", self.reopen_closed_tab),
@@ -364,15 +869,11 @@ class MainWindow(QMainWindow):
         base_dir = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation))
         return base_dir / SESSION_STATE_FILE
 
-    def _update_titlebar_buttons(self) -> None:
-        self.title_bar.max_button.setText("[]" if self.isMaximized() else "^")
-
     def toggle_maximized(self) -> None:
         if self.isMaximized():
             self.showNormal()
         else:
             self.showMaximized()
-        self._update_titlebar_buttons()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -407,6 +908,7 @@ class MainWindow(QMainWindow):
         return tab
 
     def create_tab(self, url: str = FIGMA_RECENTS, activate: bool = True, insert_index: int | None = None, title: str = "Figma") -> TabState:
+        bar = self.title_bar.tab_bar
         tab_id = self._next_tab_id()
         tab = self._build_tab(tab_id, url, title)
         if insert_index is None:
@@ -415,9 +917,10 @@ class MainWindow(QMainWindow):
         self.tabs[tab_id] = tab
         self.tab_order.insert(insert_index, tab_id)
         self.stack.insertWidget(insert_index, tab.view)
-        self.title_bar.tab_bar.insertTab(insert_index, title)
-        self.title_bar.tab_bar.setTabData(insert_index, tab_id)
-        self.title_bar.tab_bar.setTabToolTip(insert_index, url)
+        bar.insertTab(insert_index, title)
+        bar.setTabData(insert_index, tab_id)
+        bar.setTabToolTip(insert_index, url)
+        bar.animate_open_tab(tab_id)
         tab.view.setUrl(QUrl(url))
         tab.page.setZoomFactor(1.0)
         if activate:
@@ -456,18 +959,19 @@ class MainWindow(QMainWindow):
     def close_tab(self, tab_id: str | None) -> None:
         if not tab_id or tab_id not in self.tabs:
             return
-        self._destroy_tab(tab_id, remember=True)
-        if not self.tab_order and not self.shutting_down:
-            self.create_tab()
-        elif self.tab_order:
-            next_index = min(self.title_bar.tab_bar.currentIndex(), len(self.tab_order) - 1)
-            self.activate_tab(self.tab_order[max(next_index, 0)])
-        self.queue_persist_session()
+        if self.shutting_down:
+            self._finalize_closed_tab(tab_id, remember=True)
+            return
+        if not self.title_bar.tab_bar.animate_close_tab(tab_id, lambda tid=tab_id: self._finalize_closed_tab(tid, remember=True)):
+            self._finalize_closed_tab(tab_id, remember=True)
 
-    def _destroy_tab(self, tab_id: str, remember: bool) -> None:
+    def _finalize_closed_tab(self, tab_id: str, remember: bool) -> None:
+        if tab_id not in self.tabs or tab_id not in self.tab_order:
+            return
         index = self.tab_order.index(tab_id)
         tab = self.tabs.pop(tab_id)
         self.tab_order.pop(index)
+        self.title_bar.tab_bar.set_tab_loading(tab_id, False)
         if remember:
             self.closed_tabs.append((tab.url, tab.title, index))
         self.title_bar.tab_bar.removeTab(index)
@@ -475,6 +979,12 @@ class MainWindow(QMainWindow):
         tab.page.deleteLater()
         tab.view.deleteLater()
         log_event(self.logger, "tab_closed", tab_id=tab_id, index=index, url=tab.url)
+        if not self.tab_order and not self.shutting_down:
+            self.create_tab()
+        elif self.tab_order:
+            next_index = min(self.title_bar.tab_bar.currentIndex(), len(self.tab_order) - 1)
+            self.activate_tab(self.tab_order[max(next_index, 0)])
+        self.queue_persist_session()
 
     def reopen_closed_tab(self) -> None:
         if not self.closed_tabs:
@@ -514,6 +1024,7 @@ class MainWindow(QMainWindow):
     def _on_tab_moved(self, from_index: int, to_index: int) -> None:
         if from_index == to_index:
             return
+        previous_layout = self.title_bar.tab_bar.take_drag_layout_snapshot()
         tab_id = self.tab_order.pop(from_index)
         self.tab_order.insert(to_index, tab_id)
         widget = self.stack.widget(from_index)
@@ -521,6 +1032,8 @@ class MainWindow(QMainWindow):
         self.stack.insertWidget(to_index, widget)
         for index, item_tab_id in enumerate(self.tab_order):
             self.title_bar.tab_bar.setTabData(index, item_tab_id)
+        if previous_layout:
+            self.title_bar.tab_bar.animate_layout_change(previous_layout)
         self.queue_persist_session()
         log_event(self.logger, "tab_moved", tab_id=tab_id, from_index=from_index, to_index=to_index)
 
@@ -532,11 +1045,20 @@ class MainWindow(QMainWindow):
         menu = QMenu(self)
         reopen = QAction("Reopen Closed Tab", self)
         reopen.triggered.connect(self.reopen_closed_tab)
+        reload_tab = QAction("Reload Tab", self)
+        reload_tab.triggered.connect(lambda: self.reload_tab(tab_id))
         close = QAction("Close Tab", self)
         close.triggered.connect(lambda: self.close_tab(tab_id))
         menu.addAction(reopen)
+        menu.addAction(reload_tab)
         menu.addAction(close)
         menu.exec(self.title_bar.tab_bar.mapToGlobal(point))
+
+    def reload_tab(self, tab_id: str) -> None:
+        if tab_id not in self.tabs:
+            return
+        self.tabs[tab_id].page.triggerAction(self.tabs[tab_id].page.WebAction.Reload)
+        self.activate_tab(tab_id)
 
     def _on_tab_title_changed(self, tab_id: str, value: str) -> None:
         if tab_id not in self.tabs:
@@ -567,6 +1089,7 @@ class MainWindow(QMainWindow):
         if tab_id not in self.tabs:
             return
         self.tabs[tab_id].is_loading = True
+        self.title_bar.tab_bar.set_tab_loading(tab_id, True)
         log_event(self.logger, "tab_load_started", tab_id=tab_id, url=self.tabs[tab_id].url)
 
     def _on_tab_load_finished(self, tab_id: str, ok: bool) -> None:
@@ -574,6 +1097,7 @@ class MainWindow(QMainWindow):
             return
         tab = self.tabs[tab_id]
         tab.is_loading = False
+        self.title_bar.tab_bar.set_tab_loading(tab_id, False)
         tab.can_go_back = tab.page.history().canGoBack()
         tab.can_go_forward = tab.page.history().canGoForward()
         tab.page.inject_input_debug()
@@ -610,6 +1134,71 @@ class MainWindow(QMainWindow):
         self.toast.show_toast(title, message, duration_ms)
         width = min(380, self.width() - 24)
         self.toast.setGeometry(QRect(self.width() - width - 16, TITLEBAR_HEIGHT + 14, width, self.toast.sizeHint().height()))
+
+    def _default_download_path(self, download: QWebEngineDownloadRequest) -> Path:
+        downloads_dir = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DownloadLocation)
+        base_dir = Path(downloads_dir) if downloads_dir else Path.home() / "Downloads"
+        filename = (download.downloadFileName() or "").strip() or "download"
+        return base_dir / filename
+
+    def _on_download_requested(self, download: QWebEngineDownloadRequest) -> None:
+        target_path = self._default_download_path(download)
+        selected_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save as",
+            str(target_path),
+        )
+        if not selected_path:
+            download.cancel()
+            log_event(
+                self.logger,
+                "download_cancelled_before_start",
+                suggested_path=str(target_path),
+                url=download.url().toString(),
+            )
+            return
+
+        destination = Path(selected_path).expanduser()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        download.setDownloadDirectory(str(destination.parent))
+        download.setDownloadFileName(destination.name)
+        download.stateChanged.connect(lambda _state, request=download: self._on_download_state_changed(request))
+        self.active_downloads[id(download)] = download
+        download.accept()
+        self.show_toast("Download started", destination.name, duration_ms=3200)
+        log_event(
+            self.logger,
+            "download_started",
+            path=str(destination),
+            url=download.url().toString(),
+            mime_type=download.mimeType(),
+        )
+
+    def _on_download_state_changed(self, download: QWebEngineDownloadRequest) -> None:
+        state = download.state()
+        if state == QWebEngineDownloadRequest.DownloadState.DownloadCompleted:
+            path = str(Path(download.downloadDirectory()) / download.downloadFileName())
+            self.show_toast("Download complete", download.downloadFileName())
+            log_event(self.logger, "download_completed", path=path, url=download.url().toString())
+            self.active_downloads.pop(id(download), None)
+        elif state == QWebEngineDownloadRequest.DownloadState.DownloadInterrupted:
+            reason = download.interruptReasonString() or "Download failed."
+            self.show_toast("Download failed", reason)
+            log_event(
+                self.logger,
+                "download_interrupted",
+                reason=reason,
+                url=download.url().toString(),
+            )
+            self.active_downloads.pop(id(download), None)
+        elif state == QWebEngineDownloadRequest.DownloadState.DownloadCancelled:
+            log_event(
+                self.logger,
+                "download_cancelled",
+                filename=download.downloadFileName(),
+                url=download.url().toString(),
+            )
+            self.active_downloads.pop(id(download), None)
 
     def _handle_input_debug(self, payload: dict) -> None:
         log_event(self.logger, "input_debug", **payload)
@@ -681,6 +1270,6 @@ class MainWindow(QMainWindow):
             popup.close()
         for tab_id in list(self.tab_order):
             if tab_id in self.tabs:
-                self._destroy_tab(tab_id, remember=False)
+                self._finalize_closed_tab(tab_id, remember=False)
         self.font_helper.stop()
         super().closeEvent(event)

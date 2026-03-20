@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 
 from PyQt6.QtCore import Qt
@@ -13,7 +14,16 @@ from figmux.main_window import MainWindow
 from figmux.updater import AppImageUpdater
 
 
+def _configure_linux_platform_theme() -> None:
+    if sys.platform != "linux":
+        return
+    if os.environ.get("QT_QPA_PLATFORMTHEME"):
+        return
+    os.environ["QT_QPA_PLATFORMTHEME"] = "xdgdesktopportal"
+
+
 def build_application() -> QApplication:
+    _configure_linux_platform_theme()
     QApplication.setApplicationName(APP_NAME)
     QApplication.setOrganizationName(ORGANIZATION_NAME)
     QApplication.setOrganizationDomain(ORGANIZATION_DOMAIN)

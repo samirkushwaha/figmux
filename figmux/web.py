@@ -5,7 +5,7 @@ import os
 from dataclasses import dataclass
 
 from PyQt6.QtCore import QObject, Qt, QUrl, pyqtSignal
-from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtGui import QColor, QDesktopServices
 from PyQt6.QtWebEngineCore import (
     QWebEngineNavigationRequest,
     QWebEnginePage,
@@ -203,7 +203,7 @@ class FigmuxWebView(QWebEngineView):
     def __init__(self, page: FigmuxPage, parent=None):
         super().__init__(parent)
         self.setPage(page)
-        self.page().setBackgroundColor(self.palette().window().color())
+        self.page().setBackgroundColor(QColor("#2C2C2A"))
         self.page().fullScreenRequested.connect(self._on_fullscreen_requested)
 
     def _on_fullscreen_requested(self, request) -> None:

@@ -13,6 +13,17 @@
     <p>Figmux is an unofficial Linux desktop wrapper for Figma focused on packaged Flatpak and AppImage behavior.</p>
   </description>
   <releases>
+  <release version="0.4.4" date="2026-03-20">
+      <description>
+        <ul>
+          <li>Fixed title bar UI to resemble native Figma.</li>
+          <li>Fixed app not maximising.</li>
+          <li>Fixed tab closing, opening animations.</li>
+          <li>Fixed file exporting.</li>
+          <li>Fixed app dragging.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.3" date="2026-03-19">
       <description>
         <ul>
