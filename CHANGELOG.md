@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.4
+
+- Fixed title bar UI to resemble native Figma
+- Fixed app not maximising
+- Fixed tab closing, opening animations
+- Fixed file exporting
+- Fixed app dragging
+
 ## 0.4.3
 
 - Added AppImage in-app update checking against the latest GitHub Release.
