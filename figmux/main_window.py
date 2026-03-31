@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import itertools
+import os
+import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
-from PyQt6.QtCore import QEasingCurve, QPoint, QPointF, QRect, QRectF, QSize, QStandardPaths, Qt, QTimer, QUrl, QVariantAnimation
+from PyQt6.QtCore import QEvent, QEasingCurve, QPoint, QPointF, QRect, QRectF, QSize, QStandardPaths, Qt, QTimer, QUrl, QVariantAnimation
 from PyQt6.QtGui import QAction, QColor, QFont, QKeySequence, QPainter, QPen, QShortcut
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -42,7 +45,7 @@ from figmux.constants import (
 from figmux.session import SessionState, SessionTabState, load_session, save_session
 from figmux.updater import PendingUpdate
 from figmux.url_policy import can_restore_url
-from figmux.web import FigmuxPage, FigmuxWebView, WindowOpenTarget, configure_profile
+from figmux.web import FigmuxPage, FigmuxWebView, WindowOpenTarget, configure_profile, normalize_clipboard_image_for_paste
 
 
 @dataclass(slots=True)
@@ -197,6 +200,7 @@ class TitleTabBar(QTabBar):
     ANIMATION_MS = 170
     SPINNER_SIZE = 14
     SPINNER_GAP = 8
+    REORDER_BAND_PADDING = 8
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -216,6 +220,12 @@ class TitleTabBar(QTabBar):
         self.drag_active = False
         self.native_drag_started = False
         self.drag_offset = QPoint()
+        self.pressed_tab_id: str | None = None
+        self.pressed_tab_index = -1
+        self.tab_drag_start_pos = QPoint()
+        self.tab_drag_native_move_attempted = False
+        self.tab_drag_promoted_to_window_move = False
+        self.tab_drag_reorder_suspended = False
         self.loading_tabs: set[str] = set()
         self.spinner_angle = 0
         self.spinner_timer = QTimer(self)
@@ -307,13 +317,22 @@ class TitleTabBar(QTabBar):
         if event.button() == Qt.MouseButton.LeftButton:
             close_tab_id = self._tab_id_at_close_icon(event.position().toPoint())
             if close_tab_id:
+                self._reset_tab_drag_state()
                 self.pressed_close_tab_id = close_tab_id
                 self._sync_visual_states()
                 event.accept()
                 return
-            if self.tabAt(event.position().toPoint()) >= 0:
+            pressed_index = self.tabAt(event.position().toPoint())
+            if pressed_index >= 0:
                 self.drag_layout_snapshot = self.capture_layout()
-            if self.tabAt(event.position().toPoint()) < 0:
+                self.pressed_tab_index = pressed_index
+                self.pressed_tab_id = self._tab_id(pressed_index)
+                self.tab_drag_start_pos = event.position().toPoint()
+                self.tab_drag_native_move_attempted = False
+                self.tab_drag_promoted_to_window_move = False
+            else:
+                self._reset_tab_drag_state()
+            if pressed_index < 0:
                 if not self._start_window_drag(event):
                     self.drag_active = True
                     self.native_drag_started = False
@@ -341,6 +360,7 @@ class TitleTabBar(QTabBar):
                 return
         self.pressed_close_tab_id = None
         self._sync_visual_states()
+        self._reset_tab_drag_state()
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event) -> None:
@@ -359,6 +379,14 @@ class TitleTabBar(QTabBar):
                 event.accept()
                 return
             self.window().move(event.globalPosition().toPoint() - self.drag_offset)
+            event.accept()
+            return
+        if self._should_promote_tab_drag(event):
+            self.tab_drag_native_move_attempted = True
+            if self._start_tab_drag_window_move(event):
+                event.accept()
+                return
+        if self.tab_drag_promoted_to_window_move:
             event.accept()
             return
         hovered_index = self.tabAt(event.position().toPoint())
@@ -432,13 +460,58 @@ class TitleTabBar(QTabBar):
         on_finished()
 
     def _start_window_drag(self, event) -> bool:
+        del event
         window = self.window()
-        handle = window.windowHandle()
-        if handle is not None and handle.startSystemMove():
+        if hasattr(window, "start_system_move") and window.start_system_move():
             return True
         if window.isMaximized():
             return False
         return False
+
+    def _start_tab_drag_window_move(self, event) -> bool:
+        if not self._start_window_drag(event):
+            return False
+        if not self.tab_drag_reorder_suspended:
+            self.setMovable(False)
+            self.tab_drag_reorder_suspended = True
+        self.tab_drag_promoted_to_window_move = True
+        return True
+
+    def _reset_tab_drag_state(self) -> None:
+        self.pressed_tab_id = None
+        self.pressed_tab_index = -1
+        self.tab_drag_start_pos = QPoint()
+        self.tab_drag_native_move_attempted = False
+        self.tab_drag_promoted_to_window_move = False
+        if self.tab_drag_reorder_suspended:
+            self.setMovable(True)
+            self.tab_drag_reorder_suspended = False
+
+    def _should_promote_tab_drag(self, event) -> bool:
+        if self.pressed_tab_index < 0 or not self.pressed_tab_id:
+            return False
+        current_index = self._index_for_tab_id(self.pressed_tab_id)
+        if current_index < 0:
+            return False
+        self.pressed_tab_index = current_index
+        if self.tab_drag_native_move_attempted or self.tab_drag_promoted_to_window_move:
+            return False
+        if self.pressed_close_tab_id:
+            return False
+        if not (event.buttons() & Qt.MouseButton.LeftButton):
+            return False
+        point = event.position().toPoint()
+        if (point - self.tab_drag_start_pos).manhattanLength() < self._drag_threshold():
+            return False
+        return self._is_outside_reorder_band(point)
+
+    def _is_outside_reorder_band(self, point: QPoint) -> bool:
+        padding = self._drag_threshold() + self.REORDER_BAND_PADDING
+        return point.y() < -padding or point.y() > self.height() + padding
+
+    def _drag_threshold(self) -> int:
+        app = QApplication.instance()
+        return app.startDragDistance() if app is not None else 10
 
     def _animated_tab_rect(self, index: int) -> QRectF:
         rect = QRectF(self.tabRect(index))
@@ -632,8 +705,7 @@ class TitleBar(QWidget):
     def mousePressEvent(self, event) -> None:
         child = self.childAt(event.position().toPoint())
         if event.button() == Qt.MouseButton.LeftButton and child not in {self.add_button, self.close_button}:
-            handle = self.window.windowHandle()
-            if handle is None or not handle.startSystemMove():
+            if not self.window.start_system_move():
                 self.drag_active = True
                 self.native_drag_started = False
                 self.drag_offset = event.globalPosition().toPoint() - self.window.frameGeometry().topLeft()
@@ -645,8 +717,7 @@ class TitleBar(QWidget):
     def mouseMoveEvent(self, event) -> None:
         if self.drag_active and not self.window.isMaximized():
             if not self.native_drag_started:
-                handle = self.window.windowHandle()
-                if handle is not None and handle.startSystemMove():
+                if self.window.start_system_move():
                     self.native_drag_started = True
                     self.releaseMouse()
                     self.drag_active = False
@@ -671,6 +742,47 @@ class TitleBar(QWidget):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+
+
+class ResizeGrip(QWidget):
+    def __init__(self, window: "MainWindow", edges, cursor: Qt.CursorShape):
+        super().__init__(window)
+        self.main_window = window
+        self.edges = edges
+        self.drag_active = False
+        self.drag_origin = QPoint()
+        self.start_geometry = QRect()
+        self.setCursor(cursor)
+        self.setMouseTracking(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setStyleSheet("background: transparent;")
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and not (self.main_window.isMaximized() or self.main_window.isFullScreen()):
+            self.drag_origin = event.globalPosition().toPoint()
+            self.start_geometry = self.main_window.geometry()
+            if not self.main_window.start_system_resize(self.edges):
+                self.drag_active = True
+                self.grabMouse()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self.drag_active:
+            delta = event.globalPosition().toPoint() - self.drag_origin
+            self.main_window.apply_manual_resize(self.edges, self.start_geometry, delta)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if self.drag_active and event.button() == Qt.MouseButton.LeftButton:
+            self.releaseMouse()
+            self.drag_active = False
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 
 class AuthPopupWindow(QMainWindow):
@@ -723,11 +835,16 @@ class UpdateReadyDialog(QDialog):
 
 
 class MainWindow(QMainWindow):
+    RESIZE_MARGIN = 6
+    CORNER_GRIP_SIZE = 12
+
     def __init__(self, logger, font_helper, updater):
         super().__init__()
         self.logger = logger
         self.font_helper = font_helper
         self.updater = updater
+        self._last_paste_shortcut_override_at = 0.0
+        self._last_paste_shortcut_override_view_id: int | None = None
         self.profile = self._build_profile()
         self.tab_counter = itertools.count(1)
         self.tabs: dict[str, TabState] = {}
@@ -757,14 +874,19 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget(self)
         root_layout.addWidget(self.stack, 1)
         self.setCentralWidget(root)
+        self._resize_grips = self._create_resize_grips()
 
         self.toast = ToastOverlay(self)
         self._apply_styles()
         self._wire_window_controls()
         self._wire_tab_strip()
         self._install_shortcuts()
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
         self.updater.updateReady.connect(self._on_update_ready)
         self.restore_session()
+        self._update_resize_grips()
 
     def _build_profile(self) -> QWebEngineProfile:
         base_dir = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation))
@@ -805,6 +927,9 @@ class MainWindow(QMainWindow):
             }
             #addTabButton {
               margin-right: 0px;
+            }
+            #closeButton {
+              margin-left: 4px;
             }
             #toast {
               background: rgba(20, 28, 40, 235);
@@ -874,11 +999,144 @@ class MainWindow(QMainWindow):
             self.showNormal()
         else:
             self.showMaximized()
+        QTimer.singleShot(0, self._update_resize_grips)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        width = min(380, self.width() - 24)
-        self.toast.setGeometry(QRect(self.width() - width - 16, TITLEBAR_HEIGHT + 14, width, self.toast.height() or 90))
+        self._update_resize_grips()
+        if self.toast.isVisible():
+            width = min(380, self.width() - 24)
+            self.toast.setGeometry(QRect(self.width() - width - 16, TITLEBAR_HEIGHT + 14, width, self.toast.height() or 90))
+
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            QTimer.singleShot(0, self._update_resize_grips)
+
+    def eventFilter(self, watched, event) -> bool:
+        if event.type() not in {QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress}:
+            return super().eventFilter(watched, event)
+        if not self._is_paste_key_event(event):
+            return super().eventFilter(watched, event)
+        view = self._focused_managed_figmux_view(watched)
+        if view is None:
+            return super().eventFilter(watched, event)
+        if event.type() == QEvent.Type.ShortcutOverride and self._skip_duplicate_paste_shortcut_override(view):
+            return super().eventFilter(watched, event)
+        if event.type() == QEvent.Type.KeyPress and self._skip_duplicate_paste_keypress(view):
+            return super().eventFilter(watched, event)
+
+        trigger_event = "shortcut_override" if event.type() == QEvent.Type.ShortcutOverride else "key_press"
+        normalize_clipboard_image_for_paste(view.page(), trigger_event=trigger_event)
+        if event.type() == QEvent.Type.ShortcutOverride:
+            self._last_paste_shortcut_override_at = time.monotonic()
+            self._last_paste_shortcut_override_view_id = id(view)
+        return super().eventFilter(watched, event)
+
+    def _is_paste_key_event(self, event) -> bool:
+        matches = getattr(event, "matches", None)
+        return bool(callable(matches) and matches(QKeySequence.StandardKey.Paste))
+
+    def _focused_managed_figmux_view(self, watched) -> FigmuxWebView | None:
+        candidates: list[QWidget] = []
+        focus_widget = QApplication.focusWidget()
+        if isinstance(focus_widget, QWidget):
+            candidates.append(focus_widget)
+        if isinstance(watched, QWidget) and watched not in candidates:
+            candidates.append(watched)
+
+        for widget in candidates:
+            current = widget
+            while current is not None:
+                if isinstance(current, FigmuxWebView) and self._is_managed_figmux_view(current):
+                    return current
+                current = current.parentWidget()
+        return None
+
+    def _is_managed_figmux_view(self, view: FigmuxWebView) -> bool:
+        window = view.window()
+        return window is self or any(popup is window for popup in self.popup_windows)
+
+    def _skip_duplicate_paste_keypress(self, view: FigmuxWebView) -> bool:
+        if self._last_paste_shortcut_override_view_id != id(view):
+            return False
+        return (time.monotonic() - self._last_paste_shortcut_override_at) < 0.4
+
+    def _skip_duplicate_paste_shortcut_override(self, view: FigmuxWebView) -> bool:
+        if self._last_paste_shortcut_override_view_id != id(view):
+            return False
+        return (time.monotonic() - self._last_paste_shortcut_override_at) < 0.15
+
+    def _create_resize_grips(self) -> dict[str, ResizeGrip]:
+        return {
+            "top_left": ResizeGrip(self, Qt.Edge.TopEdge | Qt.Edge.LeftEdge, Qt.CursorShape.SizeFDiagCursor),
+            "top": ResizeGrip(self, Qt.Edge.TopEdge, Qt.CursorShape.SizeVerCursor),
+            "top_right": ResizeGrip(self, Qt.Edge.TopEdge | Qt.Edge.RightEdge, Qt.CursorShape.SizeBDiagCursor),
+            "left": ResizeGrip(self, Qt.Edge.LeftEdge, Qt.CursorShape.SizeHorCursor),
+            "right": ResizeGrip(self, Qt.Edge.RightEdge, Qt.CursorShape.SizeHorCursor),
+            "bottom_left": ResizeGrip(self, Qt.Edge.BottomEdge | Qt.Edge.LeftEdge, Qt.CursorShape.SizeBDiagCursor),
+            "bottom": ResizeGrip(self, Qt.Edge.BottomEdge, Qt.CursorShape.SizeVerCursor),
+            "bottom_right": ResizeGrip(self, Qt.Edge.BottomEdge | Qt.Edge.RightEdge, Qt.CursorShape.SizeFDiagCursor),
+        }
+
+    def _update_resize_grips(self) -> None:
+        if not self._resize_grips:
+            return
+        enabled = not (self.isMaximized() or self.isFullScreen())
+        for grip in self._resize_grips.values():
+            grip.setVisible(enabled)
+        if not enabled:
+            return
+
+        margin = self.RESIZE_MARGIN
+        corner = self.CORNER_GRIP_SIZE
+        width = self.width()
+        height = self.height()
+        top_span = max(0, width - (2 * corner))
+        side_span = max(0, height - (2 * corner))
+
+        self._resize_grips["top_left"].setGeometry(0, 0, corner, corner)
+        self._resize_grips["top"].setGeometry(corner, 0, top_span, margin)
+        self._resize_grips["top_right"].setGeometry(width - corner, 0, corner, corner)
+        self._resize_grips["left"].setGeometry(0, corner, margin, side_span)
+        self._resize_grips["right"].setGeometry(width - margin, corner, margin, side_span)
+        self._resize_grips["bottom_left"].setGeometry(0, height - corner, corner, corner)
+        self._resize_grips["bottom"].setGeometry(corner, height - margin, top_span, margin)
+        self._resize_grips["bottom_right"].setGeometry(width - corner, height - corner, corner, corner)
+
+        for grip in self._resize_grips.values():
+            grip.raise_()
+
+    def start_system_resize(self, edges) -> bool:
+        if self.isMaximized() or self.isFullScreen():
+            return False
+        handle = self.windowHandle()
+        return bool(handle is not None and handle.startSystemResize(edges))
+
+    def start_system_move(self) -> bool:
+        if self.isMaximized() or self.isFullScreen():
+            return False
+        handle = self.windowHandle()
+        return bool(handle is not None and handle.startSystemMove())
+
+    def apply_manual_resize(self, edges, start_geometry: QRect, delta: QPoint) -> None:
+        left = start_geometry.left()
+        right = start_geometry.right()
+        top = start_geometry.top()
+        bottom = start_geometry.bottom()
+        minimum_width = max(1, self.minimumWidth())
+        minimum_height = max(1, self.minimumHeight())
+
+        if edges & Qt.Edge.LeftEdge:
+            left = min(left + delta.x(), right - minimum_width + 1)
+        if edges & Qt.Edge.RightEdge:
+            right = max(right + delta.x(), left + minimum_width - 1)
+        if edges & Qt.Edge.TopEdge:
+            top = min(top + delta.y(), bottom - minimum_height + 1)
+        if edges & Qt.Edge.BottomEdge:
+            bottom = max(bottom + delta.y(), top + minimum_height - 1)
+
+        self.setGeometry(QRect(QPoint(left, top), QPoint(right, bottom)))
 
     def request_window_target(self, source_tab_id: str, mode: str, url: str) -> WindowOpenTarget | None:
         if mode == "popup":
@@ -1101,7 +1359,50 @@ class MainWindow(QMainWindow):
         tab.can_go_back = tab.page.history().canGoBack()
         tab.can_go_forward = tab.page.history().canGoForward()
         tab.page.inject_input_debug()
+        tab.page.inject_cursor_debug()
+        self._log_cursor_debug(tab)
         log_event(self.logger, "tab_load_finished", tab_id=tab_id, ok=ok, url=tab.url)
+
+    def _log_cursor_debug(self, tab: TabState) -> None:
+        if os.environ.get("FIGMUX_CURSOR_DEBUG") != "1":
+            return
+        view = tab.view
+        window = view.window()
+        window_handle = window.windowHandle() if window else None
+        screen = view.screen() or QApplication.primaryScreen()
+        log_event(
+            self.logger,
+            "cursor_debug_qt",
+            tab_id=tab.id,
+            url=tab.url,
+            window_device_pixel_ratio=float(window_handle.devicePixelRatio()) if window_handle else None,
+            screen_name=screen.name() if screen else None,
+            screen_device_pixel_ratio=float(screen.devicePixelRatio()) if screen else None,
+            screen_logical_dpi_x=float(screen.logicalDotsPerInchX()) if screen else None,
+            screen_logical_dpi_y=float(screen.logicalDotsPerInchY()) if screen else None,
+            screen_physical_dpi_x=float(screen.physicalDotsPerInchX()) if screen else None,
+            screen_physical_dpi_y=float(screen.physicalDotsPerInchY()) if screen else None,
+            view_width=view.width(),
+            view_height=view.height(),
+            env={
+                name: os.environ.get(name)
+                for name in (
+                    "DISPLAY",
+                    "WAYLAND_DISPLAY",
+                    "XCURSOR_SIZE",
+                    "QT_AUTO_SCREEN_SCALE_FACTOR",
+                    "QT_ENABLE_HIGHDPI_SCALING",
+                    "QT_FONT_DPI",
+                    "QT_QPA_PLATFORM",
+                    "QT_QPA_PLATFORMTHEME",
+                    "QT_SCALE_FACTOR",
+                    "QT_SCALE_FACTOR_ROUNDING_POLICY",
+                    "QT_SCREEN_SCALE_FACTORS",
+                    "QTWEBENGINE_CHROMIUM_FLAGS",
+                )
+                if os.environ.get(name) is not None
+            },
+        )
 
     def _create_popup_window(self, source_tab_id: str | None = None) -> AuthPopupWindow:
         popup_id = self._next_tab_id()
@@ -1201,7 +1502,11 @@ class MainWindow(QMainWindow):
             self.active_downloads.pop(id(download), None)
 
     def _handle_input_debug(self, payload: dict) -> None:
-        log_event(self.logger, "input_debug", **payload)
+        normalized_payload = dict(payload)
+        console_message = normalized_payload.pop("message", None)
+        if console_message is not None:
+            normalized_payload["console_message"] = console_message
+        log_event(self.logger, "input_debug", **normalized_payload)
 
     def _on_update_ready(self, pending: PendingUpdate) -> None:
         if self.update_dialog:
@@ -1264,6 +1569,9 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         self.shutting_down = True
+        app = QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
         self.persist_session()
         self.updater.install_on_exit(relaunch=self._relaunch_after_update)
         for popup in list(self.popup_windows):

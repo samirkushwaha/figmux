@@ -13,6 +13,17 @@
     <p>Figmux is an unofficial Linux desktop wrapper for Figma focused on packaged Flatpak and AppImage behavior.</p>
   </description>
   <releases>
+    <release version="0.5.0" date="2026-03-31">
+      <description>
+        <ul>
+          <li>Fixed browser-copied images pasting into Figma on Linux, including Vivaldi cases where clipboard source URL formats overrode the image payload.</li>
+          <li>Normalized and sanitized image clipboard payloads during Ctrl+V so Figma reliably receives a pasted image/png file item instead of a URL-only paste.</li>
+          <li>Improved native paste interception in the Qt wrapper so clipboard fixes run before Chromium consumes the paste shortcut.</li>
+          <li>Polished Linux window behavior with better resize grips, window dragging, and tab-drag handling around the custom title bar.</li>
+          <li>Added optional deeper input and cursor debug instrumentation to help diagnose Qt and Chromium interaction issues without affecting normal runtime behavior.</li>
+        </ul>
+      </description>
+    </release>
   <release version="0.4.4" date="2026-03-20">
       <description>
         <ul>

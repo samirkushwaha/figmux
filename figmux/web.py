@@ -4,8 +4,8 @@ import json
 import os
 from dataclasses import dataclass
 
-from PyQt6.QtCore import QObject, Qt, QUrl, pyqtSignal
-from PyQt6.QtGui import QColor, QDesktopServices
+from PyQt6.QtCore import QBuffer, QIODevice, QMimeData, QObject, Qt, QUrl, pyqtSignal
+from PyQt6.QtGui import QClipboard, QColor, QDesktopServices, QGuiApplication, QImage
 from PyQt6.QtWebEngineCore import (
     QWebEngineNavigationRequest,
     QWebEnginePage,
@@ -18,7 +18,7 @@ from PyQt6.QtWebEngineWidgets import QWebEngineView
 
 from figmux.app_logging import log_event
 from figmux.constants import FIGMA_RECENTS, WINDOWS_CHROMIUM_USER_AGENT, WINDOWS_PLATFORM
-from figmux.debug_js import DOM_EVENT_DEBUG_JS
+from figmux.debug_js import CURSOR_SCALE_DEBUG_JS, DOM_EVENT_DEBUG_JS
 from figmux.url_policy import (
     is_allowed_auth_or_figma_url,
     is_figma_auth_url,
@@ -73,6 +73,10 @@ def build_figma_navigator_spoof_script() -> QWebEngineScript:
     return script
 
 
+def navigator_spoof_enabled() -> bool:
+    return os.environ.get("FIGMUX_DISABLE_NAVIGATOR_SPOOF") != "1"
+
+
 def configure_profile(profile: QWebEngineProfile, storage_root, logger) -> None:
     storage_root.mkdir(parents=True, exist_ok=True)
     profile.setPersistentStoragePath(str(storage_root / "storage"))
@@ -116,12 +120,14 @@ class FigmuxPage(QWebEnginePage):
         self.tab_id = tab_id
         self.logger = logger
         self.source_tab_id = source_tab_id
-        self.debug_enabled = os.environ.get("FIGMUX_INPUT_DEBUG") == "1"
+        self.input_debug_enabled = os.environ.get("FIGMUX_INPUT_DEBUG") == "1"
+        self.cursor_debug_enabled = os.environ.get("FIGMUX_CURSOR_DEBUG") == "1"
         self.newWindowRequested.connect(self._on_new_window_requested)
         self.navigationRequested.connect(self._on_navigation_requested)
         self.permissionRequested.connect(self._on_permission_requested)
         self.featurePermissionRequested.connect(self._on_feature_permission_requested)
-        self.scripts().insert(build_figma_navigator_spoof_script())
+        if navigator_spoof_enabled():
+            self.scripts().insert(build_figma_navigator_spoof_script())
 
     def javaScriptConsoleMessage(self, level, message: str, line_number: int, source_id: str) -> None:
         if "[figmux-input-debug]" in message:
@@ -195,8 +201,208 @@ class FigmuxPage(QWebEnginePage):
             log_event(self.logger, "new_window_target_created", tab_id=self.tab_id, url=requested_url, mode=target.mode)
 
     def inject_input_debug(self) -> None:
-        if self.debug_enabled:
+        if self.input_debug_enabled:
             self.runJavaScript(DOM_EVENT_DEBUG_JS)
+
+    def inject_cursor_debug(self) -> None:
+        if self.cursor_debug_enabled:
+            self.runJavaScript(CURSOR_SCALE_DEBUG_JS)
+
+
+def normalize_clipboard_image_for_paste(page: FigmuxPage, *, trigger_event: str) -> bool:
+    clipboard = QGuiApplication.clipboard()
+    if clipboard is None:
+        _log_clipboard_debug_event(
+            page,
+            "clipboard_paste_intercepted",
+            tab_id=page.tab_id,
+            trigger_event=trigger_event,
+            formats=[],
+            has_image=False,
+            has_text=False,
+            has_html=False,
+            has_urls=False,
+            image_is_null=True,
+            image_source_format=None,
+            attempted_image_formats=[],
+            augmentation_status="skipped_no_clipboard",
+        )
+        return False
+
+    mime_data = clipboard.mimeData()
+    if mime_data is None:
+        _log_clipboard_debug_event(
+            page,
+            "clipboard_paste_intercepted",
+            tab_id=page.tab_id,
+            trigger_event=trigger_event,
+            formats=[],
+            has_image=False,
+            has_text=False,
+            has_html=False,
+            has_urls=False,
+            image_is_null=True,
+            image_source_format=None,
+            attempted_image_formats=[],
+            augmentation_status="skipped_no_mime_data",
+        )
+        return False
+
+    formats = [format_name.lower() for format_name in mime_data.formats()]
+    format_set = set(formats)
+    image = clipboard.image()
+    image_is_null = image.isNull()
+    image_source_format = "qt-image" if not image_is_null else None
+    attempted_image_formats: list[str] = []
+    stripped_formats = [format_name for format_name in formats if format_name in _IMAGE_PASTE_STRIP_FORMATS]
+
+    if "image/png" in format_set and not stripped_formats:
+        _log_clipboard_debug_event(
+            page,
+            "clipboard_paste_intercepted",
+            tab_id=page.tab_id,
+            trigger_event=trigger_event,
+            formats=formats,
+            has_image=mime_data.hasImage(),
+            has_text=mime_data.hasText(),
+            has_html=mime_data.hasHtml(),
+            has_urls=mime_data.hasUrls(),
+            image_is_null=image_is_null,
+            image_source_format=image_source_format,
+            attempted_image_formats=attempted_image_formats,
+            stripped_formats=stripped_formats,
+            augmentation_status="skipped_already_png",
+        )
+        return False
+
+    if image_is_null:
+        image, image_source_format, attempted_image_formats = _decode_image_from_mime_data(mime_data)
+        image_is_null = image.isNull()
+
+    if image_is_null:
+        _log_clipboard_debug_event(
+            page,
+            "clipboard_paste_intercepted",
+            tab_id=page.tab_id,
+            trigger_event=trigger_event,
+            formats=formats,
+            has_image=mime_data.hasImage(),
+            has_text=mime_data.hasText(),
+            has_html=mime_data.hasHtml(),
+            has_urls=mime_data.hasUrls(),
+            image_is_null=True,
+            image_source_format=image_source_format,
+            attempted_image_formats=attempted_image_formats,
+            stripped_formats=stripped_formats,
+            augmentation_status="skipped_no_extractable_image",
+        )
+        return False
+
+    buffer = QBuffer(page)
+    if not buffer.open(QIODevice.OpenModeFlag.WriteOnly):
+        _log_clipboard_event(
+            page,
+            "clipboard_paste_intercepted",
+            tab_id=page.tab_id,
+            trigger_event=trigger_event,
+            formats=formats,
+            has_image=mime_data.hasImage(),
+            has_text=mime_data.hasText(),
+            has_html=mime_data.hasHtml(),
+            has_urls=mime_data.hasUrls(),
+            image_is_null=False,
+            image_source_format=image_source_format,
+            attempted_image_formats=attempted_image_formats,
+            stripped_formats=stripped_formats,
+            augmentation_status="failed_open_png_buffer",
+        )
+        return False
+    if not image.save(buffer, "PNG"):
+        _log_clipboard_event(
+            page,
+            "clipboard_paste_intercepted",
+            tab_id=page.tab_id,
+            trigger_event=trigger_event,
+            formats=formats,
+            has_image=mime_data.hasImage(),
+            has_text=mime_data.hasText(),
+            has_html=mime_data.hasHtml(),
+            has_urls=mime_data.hasUrls(),
+            image_is_null=False,
+            image_source_format=image_source_format,
+            attempted_image_formats=attempted_image_formats,
+            stripped_formats=stripped_formats,
+            augmentation_status="failed_encode_png",
+        )
+        return False
+
+    normalized_mime_data = QMimeData()
+    for format_name in mime_data.formats():
+        if format_name.lower() in _IMAGE_PASTE_STRIP_FORMATS:
+            continue
+        normalized_mime_data.setData(format_name, mime_data.data(format_name))
+    normalized_mime_data.setData("image/png", buffer.data())
+    normalized_mime_data.setImageData(image)
+    clipboard.setMimeData(normalized_mime_data, QClipboard.Mode.Clipboard)
+
+    _log_clipboard_debug_event(
+        page,
+        "clipboard_paste_intercepted",
+        tab_id=page.tab_id,
+        trigger_event=trigger_event,
+        formats=formats,
+        has_image=mime_data.hasImage(),
+        has_text=mime_data.hasText(),
+        has_html=mime_data.hasHtml(),
+        has_urls=mime_data.hasUrls(),
+        image_is_null=False,
+        image_source_format=image_source_format,
+        attempted_image_formats=attempted_image_formats,
+        stripped_formats=stripped_formats,
+        augmentation_status="sanitized" if stripped_formats else "augmented",
+    )
+    _log_clipboard_debug_event(
+        page,
+        "clipboard_image_normalized_for_paste",
+        tab_id=page.tab_id,
+        operation="sanitized" if stripped_formats else "augmented",
+        trigger_event=trigger_event,
+        original_formats=formats,
+        preserved_formats=[format_name for format_name in formats if format_name not in _IMAGE_PASTE_STRIP_FORMATS],
+        added_formats=["image/png"],
+        image_source_format=image_source_format,
+        stripped_formats=stripped_formats,
+    )
+    return True
+
+
+def _log_clipboard_debug_event(page: FigmuxPage, message: str, **payload) -> None:
+    if page.input_debug_enabled:
+        log_event(page.logger, message, **payload)
+
+
+def _log_clipboard_event(page: FigmuxPage, message: str, **payload) -> None:
+    log_event(page.logger, message, **payload)
+
+
+def _decode_image_from_mime_data(mime_data: QMimeData) -> tuple[QImage, str | None, list[str]]:
+    attempted_formats: list[str] = []
+    for format_name in mime_data.formats():
+        lowered_format = format_name.lower()
+        if not lowered_format.startswith("image/") or lowered_format == "image/png":
+            continue
+        attempted_formats.append(lowered_format)
+        image = QImage.fromData(mime_data.data(format_name))
+        if not image.isNull():
+            return image, lowered_format, attempted_formats
+    return QImage(), None, attempted_formats
+
+
+_IMAGE_PASTE_STRIP_FORMATS = {
+    "chromium/x-source-url",
+    "chromium/x-internal-source-rfh-token",
+    "text/uri-list",
+}
 
 
 class FigmuxWebView(QWebEngineView):

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0
+
+- Fixed browser-copied images pasting into Figma on Linux, including Vivaldi cases where clipboard source URL formats overrode the image payload.
+- Normalized and sanitized image clipboard payloads during `Ctrl+V` so Figma reliably receives a pasted `image/png` file item instead of a URL-only paste.
+- Improved native paste interception in the Qt wrapper so clipboard fixes run before Chromium consumes the paste shortcut.
+- Polished Linux window behavior with better resize grips, window dragging, and tab-drag handling around the custom title bar.
+- Added optional deeper input/cursor debug instrumentation to help diagnose Qt/Chromium interaction issues without affecting normal runtime behavior.
+
 ## 0.4.4
 
 - Fixed title bar UI to resemble native Figma
