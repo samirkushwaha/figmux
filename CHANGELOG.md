@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.1
+
+- Fixed a startup crash when the bundled Figma agent probe times out before the local service responds.
+- Fixed image paste normalization crashing after Qt replaces the clipboard MIME data during PNG paste handling.
+
 ## 0.5.0
 
 - Fixed browser-copied images pasting into Figma on Linux, including Vivaldi cases where clipboard source URL formats overrode the image payload.

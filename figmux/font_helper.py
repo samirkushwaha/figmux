@@ -43,7 +43,7 @@ class FontHelperService(QObject):
         try:
             with urlopen(FIGMA_AGENT_VERSION_URL, timeout=timeout_seconds) as response:
                 return response.status == 200
-        except URLError:
+        except (OSError, URLError):
             return False
 
     def start(self) -> None:
