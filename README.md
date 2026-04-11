@@ -89,6 +89,14 @@ Build:
 bash scripts/appimage-build.sh
 ```
 
+The supported AppImage path uses Podman and an Ubuntu 22.04 builder image so the bundle can ship Qt TIFF support with `libtiff.so.5`.
+
+Optional host-native build:
+
+```bash
+FIGMUX_APPIMAGE_BUILD_MODE=host bash scripts/appimage-build.sh
+```
+
 Run:
 
 ```bash

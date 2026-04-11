@@ -1,6 +1,9 @@
 .venv/
+.venv-appimage/
 __pycache__/
 *.pyc
+.cache/
+.local/
 .flatpak-builder/
 .flatpak-repo/
 .flatpak-state/
