@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PyQt6.QtCore import QEvent, QEasingCurve, QPoint, QPointF, QRect, QRectF, QSize, QStandardPaths, Qt, QTimer, QUrl, QVariantAnimation
-from PyQt6.QtGui import QAction, QColor, QFont, QKeySequence, QPainter, QPen, QShortcut
+from PyQt6.QtGui import QAction, QColor, QFont, QKeySequence, QPainter, QPalette, QPen, QShortcut
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
     QApplication,
@@ -793,12 +793,47 @@ class AuthPopupWindow(QMainWindow):
         self.setCentralWidget(view)
 
 
+def _relative_luminance(color: QColor) -> float:
+    def linear_channel(value: int) -> float:
+        channel = value / 255
+        if channel <= 0.04045:
+            return channel / 12.92
+        return ((channel + 0.055) / 1.055) ** 2.4
+
+    return (
+        0.2126 * linear_channel(color.red())
+        + 0.7152 * linear_channel(color.green())
+        + 0.0722 * linear_channel(color.blue())
+    )
+
+
+def _contrast_ratio(first: QColor, second: QColor) -> float:
+    first_luminance = _relative_luminance(first)
+    second_luminance = _relative_luminance(second)
+    lighter = max(first_luminance, second_luminance)
+    darker = min(first_luminance, second_luminance)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def _readable_color(color: QColor, background: QColor, minimum_ratio: float = 4.5) -> QColor:
+    if _contrast_ratio(color, background) >= minimum_ratio:
+        return color
+
+    candidates = [color]
+    for factor in range(110, 310, 10):
+        candidates.append(color.lighter(factor))
+        candidates.append(color.darker(factor))
+    candidates.extend([QColor("#000000"), QColor("#ffffff")])
+    return max(candidates, key=lambda candidate: _contrast_ratio(candidate, background))
+
+
 class UpdateReadyDialog(QDialog):
     def __init__(self, pending: PendingUpdate, parent: QWidget | None = None):
         super().__init__(parent)
         self.setWindowTitle("Update Ready")
         self.setModal(True)
         self.resize(560, 420)
+        self._apply_palette_styles()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -812,6 +847,7 @@ class UpdateReadyDialog(QDialog):
             f"Figmux version {pending.version} has been downloaded and will be automatically installed on exit",
             self,
         )
+        description.setObjectName("updateDialogDescription")
         description.setWordWrap(True)
         layout.addWidget(description)
 
@@ -828,10 +864,69 @@ class UpdateReadyDialog(QDialog):
         button_row = QHBoxLayout()
         button_row.addStretch(1)
         self.restart_button = QPushButton("Restart now", self)
+        self.restart_button.setObjectName("updateDialogPrimaryButton")
         self.dismiss_button = QPushButton("Got it", self)
+        self.dismiss_button.setObjectName("updateDialogSecondaryButton")
         button_row.addWidget(self.restart_button)
         button_row.addWidget(self.dismiss_button)
         layout.addLayout(button_row)
+
+    def _apply_palette_styles(self) -> None:
+        palette = self.palette()
+        accent = palette.color(QPalette.ColorRole.Accent)
+        accent_text = palette.color(QPalette.ColorRole.HighlightedText)
+        readable_button_text = _readable_color(accent_text, accent)
+
+        self.setStyleSheet(
+            f"""
+            UpdateReadyDialog {{
+              background: #ffffff;
+              border: 1px solid #ededed;
+              color: #212121;
+            }}
+            UpdateReadyDialog QLabel {{
+              color: #212121;
+            }}
+            UpdateReadyDialog #updateDialogTitle {{
+              font-size: 20px;
+              font-weight: 700;
+              color: #212121;
+            }}
+            UpdateReadyDialog #updateDialogDescription {{
+              color: #212121;
+            }}
+            UpdateReadyDialog #updateDialogHeading {{
+              font-size: 12px;
+              font-weight: 700;
+              letter-spacing: 0.08em;
+              color: #212121;
+              text-transform: uppercase;
+            }}
+            UpdateReadyDialog #updateDialogChangelog {{
+              background: #ffffff;
+              border: 1px solid #ededed;
+              border-radius: 8px;
+              color: #212121;
+              padding: 10px;
+            }}
+            UpdateReadyDialog #updateDialogPrimaryButton {{
+              background: {accent.name(QColor.NameFormat.HexRgb)};
+              color: {readable_button_text.name(QColor.NameFormat.HexRgb)};
+              border: 1px solid {accent.name(QColor.NameFormat.HexRgb)};
+              border-radius: 6px;
+              padding: 6px 12px;
+              min-width: 84px;
+            }}
+            UpdateReadyDialog #updateDialogSecondaryButton {{
+              background: #ffffff;
+              color: #212121;
+              border: 1px solid #ededed;
+              border-radius: 6px;
+              padding: 6px 12px;
+              min-width: 64px;
+            }}
+            """
+        )
 
 
 class MainWindow(QMainWindow):
@@ -885,6 +980,7 @@ class MainWindow(QMainWindow):
         if app is not None:
             app.installEventFilter(self)
         self.updater.updateReady.connect(self._on_update_ready)
+        self.updater.manualCheckFinished.connect(self._on_manual_update_check_finished)
         self.restore_session()
         self._update_resize_grips()
 
@@ -902,6 +998,14 @@ class MainWindow(QMainWindow):
             QMainWindow {
               background: #11151b;
               color: #eef2f8;
+            }
+            QDialog {
+              background: #ffffff;
+              border: 1px solid #ededed;
+              color: #212121;
+            }
+            QDialog QLabel {
+              color: #212121;
             }
             TitleBar {
               background: #2c2c2a;
@@ -925,6 +1029,18 @@ class MainWindow(QMainWindow):
             QPushButton:hover {
               background: transparent;
             }
+            QDialog QPushButton {
+              background: #ffffff;
+              color: #212121;
+              border: 1px solid #ededed;
+              border-radius: 6px;
+              padding: 6px 12px;
+            }
+            QDialog QPlainTextEdit {
+              background: #ffffff;
+              color: #212121;
+              border: 1px solid #ededed;
+            }
             #addTabButton {
               margin-right: 0px;
             }
@@ -932,10 +1048,13 @@ class MainWindow(QMainWindow):
               margin-left: 4px;
             }
             #toast {
-              background: rgba(20, 28, 40, 235);
-              border: 1px solid rgba(255, 255, 255, 28);
+              background: #ffffff;
+              border: 1px solid #ededed;
               border-radius: 12px;
-              color: #eff5ff;
+              color: #212121;
+            }
+            #toast QLabel {
+              color: #212121;
             }
             #toastTitle {
               font-weight: 600;
@@ -943,20 +1062,20 @@ class MainWindow(QMainWindow):
             #updateDialogTitle {
               font-size: 20px;
               font-weight: 700;
-              color: #eff5ff;
+              color: #212121;
             }
             #updateDialogHeading {
               font-size: 12px;
               font-weight: 700;
               letter-spacing: 0.08em;
-              color: #bccadf;
+              color: #212121;
               text-transform: uppercase;
             }
             #updateDialogChangelog {
-              background: #0f141c;
-              border: 1px solid rgba(255, 255, 255, 0.08);
-              border-radius: 10px;
-              color: #e8eef9;
+              background: #ffffff;
+              border: 1px solid #ededed;
+              border-radius: 8px;
+              color: #212121;
               padding: 10px;
             }
             """
@@ -972,6 +1091,8 @@ class MainWindow(QMainWindow):
         bar.tabMoved.connect(self._on_tab_moved)
         bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         bar.customContextMenuRequested.connect(self._open_tab_context_menu)
+        self.title_bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.title_bar.customContextMenuRequested.connect(self._open_title_bar_context_menu)
         self.title_bar.add_button.clicked.connect(self.open_new_tab_at_end)
 
     def _install_shortcuts(self) -> None:
@@ -1307,10 +1428,28 @@ class MainWindow(QMainWindow):
         reload_tab.triggered.connect(lambda: self.reload_tab(tab_id))
         close = QAction("Close Tab", self)
         close.triggered.connect(lambda: self.close_tab(tab_id))
+        check_for_updates = QAction("Check for updates", self)
+        check_for_updates.triggered.connect(self._check_for_updates)
         menu.addAction(reopen)
         menu.addAction(reload_tab)
         menu.addAction(close)
+        menu.addSeparator()
+        menu.addAction(check_for_updates)
         menu.exec(self.title_bar.tab_bar.mapToGlobal(point))
+
+    def _open_title_bar_context_menu(self, point) -> None:
+        child = self.title_bar.childAt(point)
+        if child in {self.title_bar.tab_bar, self.title_bar.add_button, self.title_bar.close_button}:
+            return
+        menu = QMenu(self)
+        check_for_updates = QAction("Check for updates", self)
+        check_for_updates.triggered.connect(self._check_for_updates)
+        menu.addAction(check_for_updates)
+        menu.exec(self.title_bar.mapToGlobal(point))
+
+    def _check_for_updates(self) -> None:
+        self.show_toast("Checking for updates", "Looking for a newer AppImage release.", duration_ms=2600)
+        self.updater.check_now()
 
     def reload_tab(self, tab_id: str) -> None:
         if tab_id not in self.tabs:
@@ -1518,6 +1657,9 @@ class MainWindow(QMainWindow):
         dialog.finished.connect(lambda _: self._clear_update_dialog())
         self.update_dialog = dialog
         dialog.open()
+
+    def _on_manual_update_check_finished(self, title: str, message: str) -> None:
+        self.show_toast(title, message)
 
     def _clear_update_dialog(self) -> None:
         if self.update_dialog:

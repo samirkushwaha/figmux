@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.2
+
+- Added a title bar context menu action to manually check for AppImage updates.
+- Updated app-owned dialogs and update notifications to use a white fill, `#EDEDED` stroke, and `#212121` text for better readability.
+- Improved update check feedback for source builds, already-running checks, up-to-date releases, and failed downloads.
+
 ## 0.5.1
 
 - Fixed a startup crash when the bundled Figma agent probe times out before the local service responds.

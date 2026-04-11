@@ -53,6 +53,7 @@ def _version_key(version: str) -> tuple[int, ...]:
 
 class AppImageUpdater(QObject):
     updateReady = pyqtSignal(object)
+    manualCheckFinished = pyqtSignal(str, str)
 
     def __init__(self, logger, parent: QObject | None = None):
         super().__init__(parent)
@@ -60,7 +61,8 @@ class AppImageUpdater(QObject):
         self.current_version = __version__
         self.appimage_path = self._resolve_appimage_path()
         self.pending_update: PendingUpdate | None = None
-        self._check_started = False
+        self._automatic_check_started = False
+        self._check_in_progress = False
         self._lock = threading.Lock()
 
     @property
@@ -68,14 +70,34 @@ class AppImageUpdater(QObject):
         return self.appimage_path is not None
 
     def start(self) -> None:
-        if self._check_started:
+        if self._automatic_check_started:
             return
-        self._check_started = True
+        self._automatic_check_started = True
+        self._start_check(manual=False)
+
+    def check_now(self) -> None:
+        with self._lock:
+            pending = self.pending_update
+        if pending and pending.download_path.exists():
+            self.updateReady.emit(pending)
+            return
+        self._start_check(manual=True)
+
+    def _start_check(self, *, manual: bool) -> bool:
         if not self.enabled:
-            log_event(self.logger, "appimage_update_skipped", reason="not_appimage", current_version=self.current_version)
-            return
-        worker = threading.Thread(target=self._run_check, name="figmux-appimage-updater", daemon=True)
+            log_event(self.logger, "appimage_update_skipped", reason="not_appimage", current_version=self.current_version, manual=manual)
+            if manual:
+                self.manualCheckFinished.emit("Updates unavailable", "Update checks are available in AppImage builds.")
+            return False
+        with self._lock:
+            if self._check_in_progress:
+                if manual:
+                    self.manualCheckFinished.emit("Update check running", "Figmux is already checking for updates.")
+                return False
+            self._check_in_progress = True
+        worker = threading.Thread(target=lambda: self._run_check(manual=manual), name="figmux-appimage-updater", daemon=True)
         worker.start()
+        return True
 
     def install_on_exit(self, relaunch: bool) -> bool:
         pending = self.pending_update
@@ -152,56 +174,66 @@ fi
         base_dir = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation))
         return base_dir / "updates"
 
-    def _run_check(self) -> None:
+    def _run_check(self, *, manual: bool = False) -> None:
         log_event(self.logger, "appimage_update_check_started", current_version=self.current_version)
         try:
-            release = self._fetch_latest_release()
-        except (HTTPError, URLError, OSError, ValueError, json.JSONDecodeError) as error:
-            log_event(
-                self.logger,
-                "appimage_update_check_failed",
-                current_version=self.current_version,
-                error=str(error),
-            )
-            return
+            try:
+                release = self._fetch_latest_release()
+            except (HTTPError, URLError, OSError, ValueError, json.JSONDecodeError) as error:
+                log_event(
+                    self.logger,
+                    "appimage_update_check_failed",
+                    current_version=self.current_version,
+                    error=str(error),
+                )
+                if manual:
+                    self.manualCheckFinished.emit("Update check failed", str(error))
+                return
 
-        log_event(
-            self.logger,
-            "appimage_update_version_check",
-            current_version=self.current_version,
-            latest_version=release.version,
-        )
-        if _version_key(release.version) <= _version_key(self.current_version):
             log_event(
                 self.logger,
-                "appimage_update_not_needed",
+                "appimage_update_version_check",
                 current_version=self.current_version,
                 latest_version=release.version,
             )
-            return
+            if _version_key(release.version) <= _version_key(self.current_version):
+                log_event(
+                    self.logger,
+                    "appimage_update_not_needed",
+                    current_version=self.current_version,
+                    latest_version=release.version,
+                )
+                if manual:
+                    self.manualCheckFinished.emit("No updates found", f"Figmux {self.current_version} is up to date.")
+                return
 
-        try:
-            pending = self._download_release(release)
-        except (HTTPError, URLError, OSError) as error:
+            try:
+                pending = self._download_release(release)
+            except (HTTPError, URLError, OSError) as error:
+                log_event(
+                    self.logger,
+                    "appimage_update_download_failed",
+                    current_version=self.current_version,
+                    latest_version=release.version,
+                    error=str(error),
+                )
+                if manual:
+                    self.manualCheckFinished.emit("Update download failed", str(error))
+                return
+
+            with self._lock:
+                self.pending_update = pending
             log_event(
                 self.logger,
-                "appimage_update_download_failed",
+                "appimage_update_ready",
                 current_version=self.current_version,
-                latest_version=release.version,
-                error=str(error),
+                latest_version=pending.version,
+                path=str(pending.download_path),
             )
-            return
-
-        with self._lock:
-            self.pending_update = pending
-        log_event(
-            self.logger,
-            "appimage_update_ready",
-            current_version=self.current_version,
-            latest_version=pending.version,
-            path=str(pending.download_path),
-        )
-        self.updateReady.emit(pending)
+            self.updateReady.emit(pending)
+        finally:
+            with self._lock:
+                self._check_in_progress = False
 
     def _fetch_latest_release(self) -> ReleaseInfo:
         request = Request(
